@@ -11,6 +11,8 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("BOT_TOKEN", "PASTE_BOT_TOKEN_HERE")
+BOT_PASSWORD = os.environ.get("BOT_PASSWORD", "khang2026")
+AUTH_USERS = set()
 DATA_FILE = "reminders.json"
 PASSWORDS_FILE = "passwords.json"
 
@@ -45,25 +47,61 @@ def save_passwords(data):
 passwords = load_passwords()
 
 
+def is_auth(user_id):
+    return user_id in AUTH_USERS
+
+
+def require_auth(func):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        if not is_auth(user_id):
+            await update.message.reply_text("Vui lòng nhập mật khẩu để sử dụng bot.")
+            return
+        return await func(update, context)
+    return wrapper
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        "Chào bạn! Tôi là bot cá nhân của bạn.\n\n"
-        "Lệnh:\n"
-        "/remind <giây> <nội dung> - Đặt nhắc nhở\n"
-        "/list - Xem danh sách nhắc nhở\n"
-        "/cancel <id> - Hủy nhắc nhở\n"
-        "/dictionary <từ> - Tra từ điển Anh-Việt\n"
-        "/weather <thành phố> - Xem thời tiết\n"
-        "/ip - Check IP + vị trí\n"
-        "/password <số> - Tạo mật khẩu mạnh\n"
-        "/proxy - Random proxy free\n"
-        "/code <ext> - Tạo ảnh code đẹp\n"
-        "/screenshot <url> - Chụp ảnh web\n"
-        "/help - Hướng dẫn"
-    )
-    await update.message.reply_text(msg)
+    user_id = update.effective_user.id
+    if is_auth(user_id):
+        msg = (
+            "Chào bạn! Bot đã sẵn sàng.\n\n"
+            "Lệnh:\n"
+            "/remind <giây> <nội dung> - Đặt nhắc nhở\n"
+            "/list - Xem danh sách nhắc nhở\n"
+            "/cancel <id> - Hủy nhắc nhở\n"
+            "/dictionary <từ> - Tra từ điển\n"
+            "/weather <thành phố> - Xem thời tiết\n"
+            "/ip - Check IP + vị trí\n"
+            "/password <số> - Tạo & lưu mật khẩu\n"
+            "/passwords - Xem pass đã lưu\n"
+            "/editpass <id> <mk> - Sửa pass\n"
+            "/delpass <id> - Xóa pass\n"
+            "/proxy - Random proxy\n"
+            "/code <ext> - Ảnh code đẹp\n"
+            "/screenshot <url> - Chụp web\n"
+            "/login <pass> - Đăng nhập\n"
+            "/help - Hướng dẫn"
+        )
+        await update.message.reply_text(msg)
+    else:
+        await update.message.reply_text(
+            "Bot có bảo vệ bằng mật khẩu.\n"
+            "Gửi: /login <mật khẩu> để đăng nhập."
+        )
 
 
+async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pwd = " ".join(context.args)
+    user_id = update.effective_user.id
+    if pwd == BOT_PASSWORD:
+        AUTH_USERS.add(user_id)
+        await update.message.reply_text("Đăng nhập thành công! Gửi /start để xem lệnh.")
+    else:
+        await update.message.reply_text("Sai mật khẩu.")
+
+
+@require_auth
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "/remind 60 Mua sữa - Nhắc sau 60s\n"
@@ -84,6 +122,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+@require_auth
 async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         seconds = int(context.args[0])
@@ -113,6 +152,7 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sai cú pháp. Ví dụ: /remind 60 Mua sữa")
 
 
+@require_auth
 async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if user_id not in reminders or not reminders[user_id]:
@@ -122,6 +162,7 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Danh sách nhắc nhở:\n" + "\n".join(lines))
 
 
+@require_auth
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         rid = int(context.args[0])
@@ -136,6 +177,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sai cú pháp. Ví dụ: /cancel 1")
 
 
+@require_auth
 async def dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     word = " ".join(context.args)
     if not word:
@@ -166,6 +208,7 @@ async def dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Không tìm thấy từ '{word}' hoặc lỗi API.")
 
 
+@require_auth
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = " ".join(context.args)
     if not city:
@@ -197,6 +240,7 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Không tìm thấy thành phố '{city}'.")
 
 
+@require_auth
 async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import urllib.request
     import json as json_lib
@@ -216,6 +260,7 @@ async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi lấy thông tin IP.")
 
 
+@require_auth
 async def password_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import secrets
     import string
@@ -240,6 +285,7 @@ async def password_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@require_auth
 async def list_passwords(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if user_id not in passwords or not passwords[user_id]:
@@ -249,6 +295,7 @@ async def list_passwords(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Danh sách mật khẩu:\n" + "\n".join(lines), parse_mode="Markdown")
 
 
+@require_auth
 async def editpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         pid = int(context.args[0])
@@ -269,6 +316,7 @@ async def editpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sai cú pháp. VD: /editpass 1 abc123")
 
 
+@require_auth
 async def delpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         pid = int(context.args[0])
@@ -283,6 +331,7 @@ async def delpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sai cú pháp. VD: /delpass 1")
 
 
+@require_auth
 async def proxy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import urllib.request
     try:
@@ -309,6 +358,7 @@ async def proxy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi lấy proxy.")
 
 
+@require_auth
 async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ext = context.args[0] if context.args else "py"
     await update.message.reply_text(
@@ -318,6 +368,7 @@ async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["waiting_code"] = ext
 
 
+@require_auth
 async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ext = context.user_data.pop("waiting_code", None)
     if not ext:
@@ -352,6 +403,7 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return True
 
 
+@require_auth
 async def screenshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = " ".join(context.args)
     if not url:
@@ -416,6 +468,7 @@ async def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("login", login_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("remind", remind))
     app.add_handler(CommandHandler("list", list_reminders))
