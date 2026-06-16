@@ -291,47 +291,81 @@ async def dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Không tìm thấy từ '{word}' hoặc lỗi API.")
 
 
+# WMO weather interpretation codes -> Vietnamese description
+# https://open-meteo.com/en/docs (weather_code)
+WMO_CODES = {
+    0: "Trời quang", 1: "Ít mây", 2: "Có mây", 3: "Nhiều mây",
+    45: "Sương mù", 48: "Sương mù đóng băng",
+    51: "Mưa phùn nhẹ", 53: "Mưa phùn", 55: "Mưa phùn dày",
+    56: "Mưa phùn băng giá nhẹ", 57: "Mưa phùn băng giá",
+    61: "Mưa nhẹ", 63: "Mưa vừa", 65: "Mưa to",
+    66: "Mưa băng giá nhẹ", 67: "Mưa băng giá",
+    71: "Tuyết nhẹ", 73: "Tuyết vừa", 75: "Tuyết dày", 77: "Hạt tuyết",
+    80: "Mưa rào nhẹ", 81: "Mưa rào", 82: "Mưa rào dữ dội",
+    85: "Mưa tuyết nhẹ", 86: "Mưa tuyết dày",
+    95: "Dông", 96: "Dông kèm mưa đá nhẹ", 99: "Dông kèm mưa đá to",
+}
+
+
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = " ".join(context.args)
     if not city:
         await update.message.reply_text(
             "🌤 `/weather hanoi` — Thời tiết Hà Nội\n"
             "🌤 `/weather tuyên quang` — Tuyên Quang\n"
-            "🌤 `/weather hanoi,vi` — Tiếng Việt"
+            "🌤 `/weather da nang` — Đà Nẵng"
         )
         return
 
+    # FIX: strip legacy ",vi"/",vn" suffix from the old wttr.in format
+    city = city.split(",")[0].strip()
     cache_key = f"weather:{city.lower()}"
     cached = cache_get(cache_key, ttl=300)
     if cached:
         await update.message.reply_text(cached)
         return
 
-    candidates = [city, f"{city},Vietnam", f"{city},Vn"]
-    for c in candidates:
-        try:
-            url = f"https://wttr.in/{urllib.parse.quote(c)}?format=%C|%t|%h|%w|%p&lang=vi"
-            raw = await fetch_text(url, headers={"User-Agent": "curl/8.0"})
-            parts = raw.split("|")
-            if len(parts) >= 5 and not parts[0].startswith("Unknown"):
-                name = city.title()
-                msg = (
-                    f"🌤 **Thời tiết {name}:**\n"
-                    f"☁️ {parts[0]}\n"
-                    f"🌡 {parts[1]}\n"
-                    f"💧 {parts[2]}\n"
-                    f"💨 {parts[3]}\n"
-                    f"🌧 {parts[4]}"
-                )
-                cache_set(cache_key, msg)
-                await update.message.reply_text(msg)
-                return
-        except RateLimited:
-            await update.message.reply_text("⏳ API thời tiết đang bị giới hạn, thử lại sau.")
+    try:
+        # Step 1: geocode city name -> lat/lon
+        geo_url = (
+            "https://geocoding-api.open-meteo.com/v1/search"
+            f"?name={urllib.parse.quote(city)}&count=1&language=vi&format=json"
+        )
+        geo = await fetch_json(geo_url)
+        results = geo.get("results")
+        if not results:
+            await update.message.reply_text(f"❌ Không tìm thấy '{city}'. Thử /weather hanoi")
             return
-        except Exception:
-            continue
-    await update.message.reply_text(f"❌ Không tìm thấy '{city}'. Thử /weather hanoi")
+        loc = results[0]
+        lat, lon = loc["latitude"], loc["longitude"]
+        name = loc.get("name", city.title())
+        admin = loc.get("admin1") or loc.get("country") or ""
+
+        # Step 2: current weather at those coordinates
+        fc_url = (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lat}&longitude={lon}"
+            "&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code,apparent_temperature"
+            "&wind_speed_unit=kmh&timezone=auto"
+        )
+        fc = await fetch_json(fc_url)
+        cur = fc["current"]
+        desc = WMO_CODES.get(cur.get("weather_code"), "Không rõ")
+        place = f"{name}, {admin}" if admin else name
+        msg = (
+            f"🌤 **Thời tiết {place}:**\n"
+            f"☁️ {desc}\n"
+            f"🌡 {cur['temperature_2m']}°C (cảm giác {cur['apparent_temperature']}°C)\n"
+            f"💧 Độ ẩm {cur['relative_humidity_2m']}%\n"
+            f"💨 Gió {cur['wind_speed_10m']} km/h"
+        )
+        cache_set(cache_key, msg)
+        await update.message.reply_text(msg)
+    except RateLimited:
+        await update.message.reply_text("⏳ API thời tiết đang bị giới hạn, thử lại sau.")
+    except Exception as e:
+        logger.debug(f"Weather failed: {e}")
+        await update.message.reply_text(f"❌ Không tìm thấy '{city}'. Thử /weather hanoi")
 
 
 async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -468,12 +502,10 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = json.dumps({
             "code": text,
-            "language": lang,
-            "theme": "dracula",
-            "backgroundColor": "rgba(40,44,52,1)",
+            "settings": {"language": lang, "theme": "dracula"},
         }).encode()
         img_data = await fetch_bytes(
-            "https://carbon-api.vercel.app/api/code",
+            "https://sourcecodeshots.com/api/image",
             data=data,
             headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
             timeout=30,
