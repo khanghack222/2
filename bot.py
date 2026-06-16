@@ -4,7 +4,7 @@ import re
 import datetime
 import json
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -667,6 +667,28 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main():
     app = Application.builder().token(TOKEN).build()
+
+    commands = [
+        BotCommand("start", "Bắt đầu"),
+        BotCommand("help", "Trợ giúp"),
+        BotCommand("van", "Văn mẫu lớp 8"),
+        BotCommand("weather", "Thời tiết"),
+        BotCommand("translate", "Dịch văn bản"),
+        BotCommand("shorten", "Rút gọn link"),
+        BotCommand("qr", "Tạo QR code"),
+        BotCommand("crypto", "Giá crypto"),
+        BotCommand("joke", "Câu chuyện vui"),
+        BotCommand("id", "Thông tin của bạn"),
+        BotCommand("status", "Trạng thái bot"),
+        BotCommand("dictionary", "Tra từ điển"),
+        BotCommand("ip", "Tra thông tin IP"),
+        BotCommand("screenshot", "Chụp ảnh web"),
+        BotCommand("remind", "Đặt nhắc nhở"),
+        BotCommand("list", "DS nhắc nhở"),
+        BotCommand("code", "Chạy code Python"),
+        BotCommand("password", "Tạo mật khẩu"),
+    ]
+    await app.bot.set_my_commands(commands)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
