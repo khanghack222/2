@@ -180,7 +180,7 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         url = f"https://wttr.in/{city}?format=%C|%t|%h|%w|%p"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = resp.read().decode("utf-8")
         parts = raw.split("|")
@@ -363,10 +363,18 @@ async def screenshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not url.startswith("http"):
         url = "https://" + url
     import urllib.request
+    import urllib.parse
     try:
-        api_url = f"https://api.screenshotlayer.com/api/capture?access_key=free&url={urllib.parse.quote(url)}&viewport=1280x720&width=1024"
-        req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
+        api_url = f"https://api.microlink.io/?url={urllib.parse.quote(url)}&screenshot=true"
+        req = urllib.request.Request(api_url, headers={"User-Agent": "curl/8.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json_lib.loads(resp.read().decode())
+        img_url = data.get("data", {}).get("screenshot", {}).get("url")
+        if not img_url:
+            await update.message.reply_text("Không thể chụp ảnh.")
+            return
+        req2 = urllib.request.Request(img_url, headers={"User-Agent": "curl/8.0"})
+        with urllib.request.urlopen(req2, timeout=30) as resp:
             img_data = resp.read()
         await update.message.reply_photo(photo=img_data, caption=f"Screenshot: {url}")
     except Exception:
