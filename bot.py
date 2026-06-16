@@ -630,31 +630,6 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sys.exit(0)
 
 
-async def run_bot(app):
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    print("Bot đang chạy...")
-    while True:
-        await asyncio.sleep(3600)
-
-
-async def health_server():
-    from aiohttp import web
-    PORT = int(os.environ.get("PORT", 10000))
-
-    async def handle(request):
-        return web.Response(text="OK")
-
-    app = web.Application()
-    app.router.add_get("/", handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    print(f"Health server on port {PORT}")
-
-
 async def main():
     app = Application.builder().token(TOKEN).build()
 
@@ -685,7 +660,20 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
 
-    await asyncio.gather(health_server(), run_bot(app))
+    PORT = int(os.environ.get("PORT", 10000))
+    from aiohttp import web
+    async def handle(request):
+        return web.Response(text="OK")
+    web_app = web.Application()
+    web_app.router.add_get("/", handle)
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    print(f"Health server on port {PORT}")
+
+    print("Bot đang chạy...")
+    await app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
