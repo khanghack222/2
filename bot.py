@@ -457,6 +457,97 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+async def translate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = " ".join(context.args)
+    if not text:
+        await update.message.reply_text("Nhập văn bản. VD: /translate hello world")
+        return
+    import urllib.request, urllib.parse
+    try:
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=vi&dt=t&q={urllib.parse.quote(text)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        result = json.loads(raw)
+        translated = result[0][0][0]
+        await update.message.reply_text(f"Bản dịch: {translated}")
+    except Exception:
+        await update.message.reply_text("Lỗi dịch.")
+
+
+async def shorten_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = " ".join(context.args)
+    if not url:
+        await update.message.reply_text("Nhập URL. VD: /shorten https://example.com")
+        return
+    import urllib.request, urllib.parse
+    try:
+        api = f"https://is.gd/create.php?format=simple&url={urllib.parse.quote(url)}"
+        req = urllib.request.Request(api, headers={"User-Agent": "curl/8.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            short = resp.read().decode("utf-8").strip()
+        await update.message.reply_text(f"Link rút gọn: {short}")
+    except Exception:
+        await update.message.reply_text("Lỗi rút gọn link.")
+
+
+async def qr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = " ".join(context.args)
+    if not text:
+        await update.message.reply_text("Nhập nội dung. VD: /qr https://google.com")
+        return
+    import urllib.request, urllib.parse
+    try:
+        url = f"https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={urllib.parse.quote(text)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            img = resp.read()
+        await update.message.reply_photo(photo=img, caption="QR Code")
+    except Exception:
+        await update.message.reply_text("Lỗi tạo QR.")
+
+
+async def crypto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import urllib.request
+    try:
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,ripple&vs_currencies=usd&include_24hr_change=true"
+        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        lines = ["Giá Crypto (USD):"]
+        for coin, info in data.items():
+            price = info["usd"]
+            change = info.get("usd_24h_change", 0)
+            arrow = "📈" if change >= 0 else "📉"
+            lines.append(f"{coin.upper()}: ${price} ({arrow} {change:+.2f}%)")
+        await update.message.reply_text("\n".join(lines))
+    except Exception:
+        await update.message.reply_text("Lỗi lấy giá crypto.")
+
+
+async def joke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import urllib.request
+    try:
+        url = "https://official-joke-api.appspot.com/random_joke"
+        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        await update.message.reply_text(f"{data['setup']}\n\n{data['punchline']}")
+    except Exception:
+        await update.message.reply_text("Lỗi lấy joke.")
+
+
+async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    username = f"@{user.username}" if user.username else "Không có"
+    msg = (
+        f"ID của bạn: {user.id}\n"
+        f"Tên: {user.full_name}\n"
+        f"Username: {username}"
+    )
+    await update.message.reply_text(msg)
+
+
 async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if ADMIN_ID is not None and user_id != ADMIN_ID:
@@ -510,6 +601,12 @@ async def main():
     app.add_handler(CommandHandler("proxy", proxy_cmd))
     app.add_handler(CommandHandler("code", code_cmd))
     app.add_handler(CommandHandler("screenshot", screenshot_cmd))
+    app.add_handler(CommandHandler("translate", translate_cmd))
+    app.add_handler(CommandHandler("shorten", shorten_cmd))
+    app.add_handler(CommandHandler("qr", qr_cmd))
+    app.add_handler(CommandHandler("crypto", crypto_cmd))
+    app.add_handler(CommandHandler("joke", joke_cmd))
+    app.add_handler(CommandHandler("id", id_cmd))
     app.add_handler(CommandHandler("restart", restart_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
