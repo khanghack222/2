@@ -776,80 +776,87 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text(f"⚠️ Email `{email}` không khả dụng, thử email khác...", parse_mode="Markdown")
 
         await msg.edit_text(f"⏳ Bước 3/5: Đang gửi mã xác thực tới `{email}`...", parse_mode="Markdown")
-        sms_body = json.dumps({"smsType": 2, "mobilePhone": email, "captchaVerifyParam": ""}).encode()
-        sms_req = urllib.request.Request(f"{base}/sms/smsSend", data=sms_body, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(sms_req, timeout=10) as resp:
-                sms_result = json.loads(resp.read().decode("utf-8"))
-            if sms_result.get("code") != 200:
-                await msg.edit_text(
-                    f"❌ Gửi mã thất bại ({sms_result.get('msg', 'Lỗi')})\n"
-                    f"Cần captcha Aliyun. Thử reg tay tại cloud.vmos.com\n"
-                    f"📧 Email tạm: `{email}`",
-                    parse_mode="Markdown"
-                )
-                return
-
-            await msg.edit_text(f"✅ Bước 3/5: Đã gửi mã\n⏳ Bước 4/5: Đang đợi mail ({60}s)...", parse_mode="Markdown")
-            for _ in range(12):
-                time.sleep(5)
-                inbox_req = urllib.request.Request(
-                    f"https://www.1secmail.com/api/v1/?action=getMessages&login={name}&domain={domain}",
-                    headers={"User-Agent": "Mozilla/5.0"}
-                )
-                with urllib.request.urlopen(inbox_req, timeout=10) as ir:
-                    inbox = json.loads(ir.read().decode("utf-8"))
-                if inbox:
-                    mid = inbox[0]["id"]
-                    read_req = urllib.request.Request(
-                        f"https://www.1secmail.com/api/v1/?action=readMessage&login={name}&domain={domain}&id={mid}",
-                        headers={"User-Agent": "Mozilla/5.0"}
-                    )
-                    with urllib.request.urlopen(read_req, timeout=10) as rr:
-                        mail = json.loads(rr.read().decode("utf-8"))
-                    body = mail.get("textBody", "") or mail.get("htmlBody", "")
-                    codes = re.findall(r'\b(\d{6})\b', body)
-                    if codes:
-                        code = codes[0]
-                        await msg.edit_text(f"✅ Bước 4/5: Nhận được mã `{code}`\n⏳ Bước 5/5: Đang đăng nhập...", parse_mode="Markdown")
-                        login_body = json.dumps({
-                            "mobilePhone": email,
-                            "loginType": 0,
-                            "verifyCode": code,
-                            "channel": "web"
-                        }).encode()
-                        login_req = urllib.request.Request(
-                            f"{base}/user/login", data=login_body,
-                            headers=headers, method="POST"
-                        )
-                        with urllib.request.urlopen(login_req, timeout=10) as lr:
-                            login = json.loads(lr.read().decode("utf-8"))
-                        if login.get("code") == 200:
-                            token = login.get("data", {}).get("token", "")
-                            await msg.edit_text(
-                                f"🎉 **Hoàn tất! Tài khoản VMOS Cloud**\n\n"
-                                f"📧 Email: `{email}`\n"
-                                f"🔑 Token: `{token[:50]}...`\n"
-                                f"⏱ Trial 2h đã kích hoạt!",
-                                parse_mode="Markdown"
-                            )
-                        else:
-                            await msg.edit_text(
-                                f"❌ Bước 5/5: Đăng nhập thất bại ({login.get('msg', 'Lỗi')})\n"
-                                f"📧 Email: `{email}`\n"
-                                f"🔑 Mã: `{code}`",
-                                parse_mode="Markdown"
-                            )
-                        return
-                await msg.edit_text(f"✅ Bước 3/5: Đã gửi mã\n⏳ Bước 4/5: Đợi mail ({( _ + 1) * 5}s)...", parse_mode="Markdown")
-            await msg.edit_text(f"❌ Hết thời gian chờ mã.\n📧 Email: `{email}`", parse_mode="Markdown")
-        except urllib.error.HTTPError as e:
+        # Try multiple methods to bypass captcha
+        sms_sent = False
+        sms_result = None
+        sms_attempts = [
+            {"smsType": 2, "mobilePhone": email, "captchaVerifyParam": ""},
+            {"smsType": 2, "mobilePhone": email},
+            {"smsType": 2, "mobilePhone": email, "captchaVerifyParam": "none"},
+        ]
+        for sms_body_data in sms_attempts:
+            try:
+                sms_body = json.dumps(sms_body_data).encode()
+                sms_req = urllib.request.Request(f"{base}/sms/smsSend", data=sms_body, headers=headers, method="POST")
+                with urllib.request.urlopen(sms_req, timeout=10) as resp:
+                    sms_result = json.loads(resp.read().decode("utf-8"))
+                if sms_result.get("code") == 200:
+                    sms_sent = True
+                    break
+            except Exception:
+                continue
+        if not sms_sent:
             await msg.edit_text(
-                f"❌ Bước 3/5: API lỗi {e.code}\n"
-                f"Cần captcha Aliyun. Thử reg tay với email:\n"
-                f"📧 `{email}`",
+                f"❌ Gửi mã thất bại ({sms_result.get('msg', 'Lỗi') if sms_result else 'không phản hồi'})\n"
+                f"Cần captcha Aliyun. Thử reg tay tại cloud.vmos.com\n"
+                f"📧 Email tạm: `{email}`",
                 parse_mode="Markdown"
             )
+            return
+
+        await msg.edit_text(f"✅ Bước 3/5: Đã gửi mã\n⏳ Bước 4/5: Đang đợi mail (60s)...", parse_mode="Markdown")
+        for _ in range(12):
+            time.sleep(5)
+            inbox_req = urllib.request.Request(
+                f"https://www.1secmail.com/api/v1/?action=getMessages&login={name}&domain={domain}",
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(inbox_req, timeout=10) as ir:
+                inbox = json.loads(ir.read().decode("utf-8"))
+            if inbox:
+                mid = inbox[0]["id"]
+                read_req = urllib.request.Request(
+                    f"https://www.1secmail.com/api/v1/?action=readMessage&login={name}&domain={domain}&id={mid}",
+                    headers={"User-Agent": "Mozilla/5.0"}
+                )
+                with urllib.request.urlopen(read_req, timeout=10) as rr:
+                    mail = json.loads(rr.read().decode("utf-8"))
+                body = mail.get("textBody", "") or mail.get("htmlBody", "")
+                codes = re.findall(r'\b(\d{6})\b', body)
+                if codes:
+                    code = codes[0]
+                    await msg.edit_text(f"✅ Bước 4/5: Nhận được mã `{code}`\n⏳ Bước 5/5: Đang đăng nhập...", parse_mode="Markdown")
+                    login_body = json.dumps({
+                        "mobilePhone": email,
+                        "loginType": 0,
+                        "verifyCode": code,
+                        "channel": "web"
+                    }).encode()
+                    login_req = urllib.request.Request(
+                        f"{base}/user/login", data=login_body,
+                        headers=headers, method="POST"
+                    )
+                    with urllib.request.urlopen(login_req, timeout=10) as lr:
+                        login = json.loads(lr.read().decode("utf-8"))
+                    if login.get("code") == 200:
+                        token = login.get("data", {}).get("token", "")
+                        await msg.edit_text(
+                            f"🎉 **Hoàn tất! Tài khoản VMOS Cloud**\n\n"
+                            f"📧 Email: `{email}`\n"
+                            f"🔑 Token: `{token[:50]}...`\n"
+                            f"⏱ Trial 2h đã kích hoạt!",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await msg.edit_text(
+                            f"❌ Bước 5/5: Đăng nhập thất bại ({login.get('msg', 'Lỗi')})\n"
+                            f"📧 Email: `{email}`\n"
+                            f"🔑 Mã: `{code}`",
+                            parse_mode="Markdown"
+                        )
+                    return
+            await msg.edit_text(f"✅ Bước 3/5: Đã gửi mã\n⏳ Bước 4/5: Đợi mail ({( _ + 1) * 5}s)...", parse_mode="Markdown")
+        await msg.edit_text(f"❌ Hết thời gian chờ mã.\n📧 Email: `{email}`", parse_mode="Markdown")
     except Exception as e:
         await msg.edit_text(f"❌ Lỗi: {str(e)[:200]}")
 
