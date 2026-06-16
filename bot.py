@@ -1054,18 +1054,18 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await msg.edit_text(
-        f"📧 `{email}`\n🔑 `{pw}`\n\n{hint}"
+        f"📧 `{email}`\n\n{hint}"
     )
 
     # 5. Start background polling
     task = asyncio.create_task(
-        _vmos_poll_loop(user_id, chat_id, context.bot, mail_token, email, pw, msg)
+        _vmos_poll_loop(user_id, chat_id, context.bot, mail_token, email, msg)
     )
     _vmos_poll_tasks[user_id] = task
 
 
-async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, pw, info_msg):
-    """Poll mail.tm inbox for OTP, then auto-register + trial."""
+async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, info_msg):
+    """Poll mail.tm inbox for OTP, then try API directly (no password)."""
     try:
         known_ids = set()
         for attempt in range(35):
@@ -1099,33 +1099,22 @@ async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, pw, info_msg
                 if not otp:
                     continue
 
-                # Found OTP! Tell user to register manually on the website.
+                # Found OTP! Try API immediately
                 await bot.edit_message_text(
-                    f"📧 `{email}`\n🔑 `{pw}`\n"
-                    f"✅ OTP: `{otp}`\n\n"
-                    f"1️⃣ Mở https://cloud.vmoscloud.com/login\n"
-                    f"2️⃣ Nhập email, dán OTP `{otp}`, set pass `{pw}`\n"
-                    f"3️⃣ Bấm đăng ký\n\n"
-                     f"⏳ Bot chờ 90s rồi tự login + trial...",
+                    f"📧 `{email}`\n✅ OTP: `{otp}`\n⏳ Đang reg...",
                     chat_id=chat_id, message_id=info_msg.message_id,
                 )
 
-                # Wait for user to register manually
-                await asyncio.sleep(90)
-
-                # Now try to login with password
-                import hashlib
-                pw_md5 = hashlib.md5(pw.encode()).hexdigest()
+                # Try login API with OTP (no password)
                 token = None
-                login_payloads = [
-                    {"email": email, "loginType": 1, "password": pw_md5, "channel": "web"},
-                    {"mobilePhone": email, "loginType": 1, "password": pw_md5, "channel": "web"},
-                    {"email": email, "password": pw, "channel": "web"},
-                    {"mobilePhone": email, "password": pw, "channel": "web"},
-                ]
-                for lp in login_payloads:
-                    rc, rd = _vmos_req(f"{_BX}/user/login", lp, "POST", _VMOS_HD, 10)
-                    logger.debug(f"VMOS login payload {list(lp.keys())}: HTTP={rc}, resp={str(rd)[:500]}")
+                for payload in [
+                    {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
+                    {"email": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
+                    {"mobilePhone": email, "loginType": 0, "verifyCode": otp},
+                    {"email": email, "loginType": 0, "verifyCode": otp},
+                ]:
+                    rc, rd = _vmos_req(f"{_BX}/user/login", payload, "POST", _VMOS_HD, 10)
+                    logger.debug(f"VMOS OTP payload {list(payload.keys())}: HTTP={rc}, resp={str(rd)[:500]}")
                     if isinstance(rd, dict):
                         for k in ("code", "status", "resultCode", "success"):
                             v = rd.get(k)
@@ -1147,13 +1136,15 @@ async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, pw, info_msg
                             trial = " | ✅ Trial"
                             break
                     await bot.edit_message_text(
-                        f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`{trial}",
+                        f"🎉 **Acc VMOS**\n📧 `{email}`{trial}",
                         chat_id=chat_id, message_id=info_msg.message_id,
                     )
                 else:
                     await bot.edit_message_text(
-                        f"✅ OTP `{otp}` — login API chưa được (mày reg chưa?).\n"
-                        f"👉 Đăng nhập https://cloud.vmoscloud.com bằng `{email}` / `{pw}`",
+                        f"📧 `{email}`\n✅ OTP: `{otp}`\n\n"
+                        f"👉 Mở https://cloud.vmoscloud.com/login\n"
+                        f"1. Nhập email → Gửi mã\n"
+                        f"2. Dán OTP `{otp}` → Đăng nhập",
                         chat_id=chat_id, message_id=info_msg.message_id,
                     )
                 return  # done
@@ -1185,7 +1176,7 @@ async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not reg:
         await update.message.reply_text(
             "❌ Chưa chạy `/vmos`.\n"
-            "📌 `/vmos` → bot tạo email → bạn nhập email vào cloud.vmoscloud.com/login → nhận OTP → `/otp <mã>`"
+            "📌 `/vmos` → bot tạo email → bạn nhập email vào cloud.vmoscloud.com/login → `/otp <mã>`"
         )
         return
 
@@ -1200,26 +1191,18 @@ async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     email = reg["email"]
-    pw = reg["password"]
-    msg = await update.message.reply_text(
-        f"ℹ️ Mở https://cloud.vmoscloud.com/login\n"
-        f"Nhập email, OTP `{otp}`, pass `{pw}` → đăng ký xong ✅\n"
-        f"Bot chờ 90s rồi auto login + trial..."
-    )
-    await asyncio.sleep(90)
+    msg = await update.message.reply_text("⏳ Đang reg...")
 
-    import hashlib
-    pw_md5 = hashlib.md5(pw.encode()).hexdigest()
+    # Try API with OTP immediately
     token = None
-    login_payloads = [
-        {"email": email, "loginType": 1, "password": pw_md5, "channel": "web"},
-        {"mobilePhone": email, "loginType": 1, "password": pw_md5, "channel": "web"},
-        {"email": email, "password": pw, "channel": "web"},
-        {"mobilePhone": email, "password": pw, "channel": "web"},
-    ]
-    for lp in login_payloads:
-        rc, rd = _vmos_req(f"{_BX}/user/login", lp, "POST", _VMOS_HD, 10)
-        logger.debug(f"OTP login payload {list(lp.keys())}: HTTP={rc}, resp={str(rd)[:500]}")
+    for payload in [
+        {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
+        {"email": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
+        {"mobilePhone": email, "loginType": 0, "verifyCode": otp},
+        {"email": email, "loginType": 0, "verifyCode": otp},
+    ]:
+        rc, rd = _vmos_req(f"{_BX}/user/login", payload, "POST", _VMOS_HD, 10)
+        logger.debug(f"OTP reg payload {list(payload.keys())}: HTTP={rc}, resp={str(rd)[:500]}")
         if isinstance(rd, dict):
             for k in ("code", "status", "resultCode", "success"):
                 v = rd.get(k)
@@ -1240,11 +1223,13 @@ async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if isinstance(rd2, dict) and rd2.get("code") in (200, 0):
                 trial = " | ✅ Trial"
                 break
-        await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`{trial}")
+        await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`{trial}")
     else:
         await msg.edit_text(
-            f"❌ Chưa login được (mày reg chưa?).\n"
-            f"👉 Đăng nhập https://cloud.vmoscloud.com bằng `{email}` / `{pw}`"
+            f"📧 `{email}`\n✅ OTP: `{otp}`\n\n"
+            f"👉 Mở https://cloud.vmoscloud.com/login\n"
+            f"1. Nhập email → Gửi mã\n"
+            f"2. Dán OTP → Đăng nhập"
         )
 
 
