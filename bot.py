@@ -748,73 +748,68 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request, urllib.parse, json, random, urllib.error, html as html_mod
+    import urllib.request, json, random, re, html as html_mod
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     gm = "https://api.guerrillamail.com/ajax.php"
 
-    msg = await update.message.reply_text("⏳ Đang tạo email...")
+    msg = await update.message.reply_text("⏳ Tạo email tạm...")
     try:
         r = json.loads(urllib.request.urlopen(urllib.request.Request(f"{gm}?f=get_email_address", headers={"User-Agent": ua}), timeout=15).read().decode())
         email = (r if isinstance(r, dict) else {}).get("email_addr", "")
         sid = (r if isinstance(r, dict) else {}).get("sid_token", "")
         if not email:
-            await msg.edit_text("❌ Không tạo được email tạm"); return
+            await msg.edit_text("❌ Không tạo được email"); return
 
         pw = str(random.randint(10000, 99999))
-        bx = "https://api.vmoscloud.com/vcpcloud/api"
-        hd = {"Content-Type": "application/json", "Accept-Language": "vi", "clientType": "web",
-            "appVersion": "3.6.1401", "requestsource": "wechat-miniapp", "SupplierType": "0", "User-Agent": ua}
-        paths = ["/user/register", "/user/create", "/user/registerByEmail", "/user/signup", "/api/register", "/api/user/register"]
-        bodies = [
-            {"email": email, "password": pw, "confirmPassword": pw},
-            {"email": email, "password": pw},
-            {"mobilePhone": email, "password": pw, "confirmPassword": pw},
-            {"email": email, "password": pw, "confirmPassword": pw, "channel": "web"},
-            {"email": email, "password": pw, "confirmPassword": pw, "sourceType": 0},
-            {"email": email, "password": pw, "confirmPassword": pw, "smsType": 0},
-            {"email": email, "password": pw, "confirmPassword": pw, "verifyCode": ""},
-        ]
-        sources = [("wechat-miniapp","web"), ("android","app"), ("ios","app"), ("miniapp","miniapp"), ("web","web"), ("app","app")]
+        await msg.edit_text(
+            f"📧 `{email}`\n🔑 `{pw}`\n\n"
+            f"👉 **Mở link này** → nhập email + pass → bấm gửi mã → **giải captcha**:\n"
+            f"https://cloud.vmos.com/register\n\n"
+            f"🔄 Bot đang chờ mã ở hộp thư...")
 
-        await msg.edit_text(f"⏳ Đang reg `{email}`...")
-        reg_ok = False
-        for rs, ct in sources:
-            hd2 = {**hd, "requestsource": rs, "clientType": ct}
-            for p in paths:
-                for b in bodies:
-                    try:
-                        r = urllib.request.urlopen(urllib.request.Request(f"{bx}{p}", data=json.dumps(b).encode(), headers=hd2, method="POST"), timeout=10)
-                        j = json.loads(r.read().decode())
-                        d = j if isinstance(j, dict) else (j[0] if isinstance(j, list) and j else {})
-                        if d.get("code") == 200:
-                            await msg.edit_text(f"⏳ Mua trial...")
-                            try:
-                                t = urllib.request.urlopen(urllib.request.Request(f"{bx}/order/create", data=json.dumps({"email": email, "type": 1}).encode(), headers=hd, method="POST"), timeout=10)
-                                tj = json.loads(t.read().decode())
-                                td = tj if isinstance(tj, dict) else {}
-                                await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{'✅ Trial' if td.get('code')==200 else '❌ '+str(td.get('msg',''))[:30]}")
-                            except:
-                                await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n✅ Reg OK (trial fail)")
-                            reg_ok = True; raise StopIteration
-                    except StopIteration:
-                        raise
-                    except:
-                        pass
-            if reg_ok: break
-        
-        if not reg_ok:
-            # Guide mode
-            await msg.edit_text(
-                f"❌ Không reg tự động được (captcha)\n\n"
-                f"📧 **Email:** `{email}`\n🔑 **Pass:** `{pw}`\n"
-                f"📬 https://www.guerrillamail.com/\n\n"
-                f"👉 Vào link rồi reg tay:\n"
-                f"https://cloud.vmos.com/register\n"
-                f"Xong nhập email này → lấy mã → set pass `{pw}`\n"
-                f"Bật tab Guerrilla Mail để nhận mã."
-            )
-    except StopIteration:
-        pass
+        for i in range(40):
+            await asyncio.sleep(3)
+            try:
+                r = json.loads(urllib.request.urlopen(urllib.request.Request(f"{gm}?f=get_email_list&sid_token={sid}", headers={"User-Agent": ua}), timeout=10).read().decode())
+                msgs = (r if isinstance(r, dict) else {}).get("list", [])
+                if not msgs: continue
+                d = json.loads(urllib.request.urlopen(urllib.request.Request(f"{gm}?f=fetch_email&email_id={msgs[0].get('mail_id','')}&sid_token={sid}", headers={"User-Agent": ua}), timeout=10).read().decode())
+                body = html_mod.unescape((d if isinstance(d, dict) else {}).get("mail_body", "") or "")
+                codes = re.findall(r'\b\d{6}\b', body)
+                if codes:
+                    otp = codes[0]
+                    await msg.edit_text(f"✅ Có mã `{otp}`\n⏳ Đang reg + trial...")
+                    bx = "https://api.vmoscloud.com/vcpcloud/api"
+                    hd = {"Content-Type": "application/json", "User-Agent": ua, "requestsource": "wechat-miniapp", "clientType": "web", "appVersion": "3.6.1401"}
+                    for b in [
+                        {"email": email, "password": pw, "confirmPassword": pw, "verifyCode": otp},
+                        {"email": email, "password": pw, "confirmPassword": pw},
+                        {"mobilePhone": email, "password": pw, "confirmPassword": pw, "verifyCode": otp},
+                    ]:
+                        try:
+                            r = urllib.request.urlopen(urllib.request.Request(f"{bx}/user/register", data=json.dumps(b).encode(), headers=hd, method="POST"), timeout=10)
+                            reg = json.loads(r.read().decode())
+                            rd = reg if isinstance(reg, dict) else (reg[0] if isinstance(reg, list) and reg else {})
+                            if rd.get("code") == 200:
+                                try:
+                                    t = urllib.request.urlopen(urllib.request.Request(f"{bx}/order/create", data=json.dumps({"email": email, "type": 1}).encode(), headers=hd, method="POST"), timeout=10)
+                                    tj = json.loads(t.read().decode())
+                                    td = tj if isinstance(tj, dict) else {}
+                                    await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{'✅ Trial' if td.get('code')==200 else '❌ '+str(td.get('msg',''))[:30]}")
+                                except:
+                                    await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n✅ Reg OK")
+                                return
+                        except: pass
+                    await msg.edit_text(f"✅ Có mã `{otp}` nhưng reg lỗi\n📧 `{email}`\n🔑 `{pw}`\n👉 Reg tay: cloud.vmos.com")
+                    return
+            except: pass
+            if i == 5:
+                await msg.edit_text(
+                    f"📧 `{email}`\n🔑 `{pw}`\n\n"
+                    f"👉 Vào link → nhập email + pass → gửi mã → **giải captcha kéo mảnh ghép**:\n"
+                    f"https://cloud.vmos.com/register\n\n"
+                    f"🔄 Bot đang chờ...")
+        await msg.edit_text(f"❌ Hết giờ\n📧 `{email}`\n🔑 `{pw}`\n📬 https://www.guerrillamail.com/")
     except Exception as e:
         try: await msg.edit_text(f"❌ {str(e)[:200]}")
         except: pass
