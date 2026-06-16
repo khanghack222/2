@@ -1054,10 +1054,13 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     hint = (
         f"📧 **Email:** `{email}`\n\n"
-        f"🔗 **Bước 1:** Mở link này và **kéo captcha**\n"
+        f"🔗 **Cách 1 (nhanh):** Mở link này và **kéo captcha**\n"
         f"{captcha_url}\n\n"
-        f"📧 **Bước 2:** Sau đó nhập email trên vào https://cloud.vmoscloud.com/login\n"
-        f"   → bấm **Gửi mã**\n\n"
+        f"🔗 **Cách 2 (thủ công):**\n"
+        f"1. Mở https://cloud.vmoscloud.com/login\n"
+        f"2. Nhập `{email}` → bấm **Gửi mã**\n"
+        f"3. Kéo captcha trên website\n"
+        f"4. Bot tự động check OTP\n\n"
         f"⏳ Bot tự động check OTP từ mail và đăng nhập.\n"
         f"📌 Nếu lâu quá, dùng `/otp <mã>` để nhập thủ công."
     )
@@ -1365,22 +1368,23 @@ async def main():
     async def handle(request):
         return web.Response(text="OK")
 
-    CAPTCHA_PAGE = r"""<!DOCTYPE html>
+    CAPTCHA_PAGE = """<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>VMOS Captcha</title>
 <style>
-body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#f5f5f5;font-family:sans-serif;flex-direction:column;gap:20px}
-.card{background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.1);padding:30px;text-align:center;max-width:400px}
-h2{color:#333;margin:0 0 8px}
-p{color:#666;margin:0 0 20px;font-size:14px}
-#captcha-element{display:flex;justify-content:center}
-.btn{background:#1677ff;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:16px;cursor:pointer;transition:background .2s}
+*{box-sizing:border-box}
+body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+.card{background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.1);padding:24px;text-align:center;max-width:380px;width:92%}
+h2{color:#333;margin:0 0 6px;font-size:20px}
+p{color:#666;margin:0 0 16px;font-size:14px}
+#captcha-element{display:flex;justify-content:center;min-height:100px;margin:12px 0}
+.btn{background:#1677ff;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:16px;cursor:pointer;width:100%;transition:background .2s}
 .btn:hover{background:#4096ff}
 .btn.loading{opacity:.6;pointer-events:none}
-.status{font-size:14px;padding:8px 16px;border-radius:6px;margin-top:12px}
+.status{font-size:13px;padding:8px 12px;border-radius:6px;margin:8px 0}
 .status.ok{background:#f6ffed;color:#52c41a;border:1px solid #b7eb8f}
 .status.err{background:#fff2f0;color:#ff4d4f;border:1px solid #ffccc7}
 </style>
@@ -1390,75 +1394,21 @@ p{color:#666;margin:0 0 20px;font-size:14px}
 <h2>Xác thực VMOS</h2>
 <p>Kéo thả mảnh ghép để xác thực</p>
 <div id="captcha-element"></div>
-<button class="btn" id="startBtn" onclick="showCaptcha()">Bắt đầu xác thực</button>
+<button class="btn" id="startBtn">Bắt đầu xác thực</button>
 <div id="status"></div>
 </div>
+<script src="/captcha/proxy/aliyun_captcha.js?v=1"></script>
 <script>
-async function showCaptcha(){
-  var btn=document.getElementById('startBtn');
-  var st=document.getElementById('status');
-  btn.classList.add('loading');
-  btn.textContent='Đang tải...';
-  st.className='status';
-  st.textContent='Dang tai SDK captcha...';
-  try{
-    var     var SDK = window.AliyunCaptcha;
-    if(!SDK){
-      var s=document.createElement('script');
-      s.src=window.location.origin+'/captcha/proxy/aliyun_captcha.js?v=1';
-      document.body.appendChild(s);
-      await new Promise(function(resolve,reject){
-        s.onload=function(){SDK=window.AliyunCaptcha;if(SDK)resolve();else reject(new Error('SDK loaded but AliyunCaptcha not found'));};
-        s.onerror=function(){reject(new Error('Proxy load failed'));};
-      });
-    }
-    st.textContent='';
-    window.AliyunCaptcha({
-      SceneId:'5jvar3wp',
-      prefix:'69r0rc',
-      mode:'popup',
-      element:'#captcha-element',
-      language:'vi',
-      region:'sgp',
-      slideStyle:{width:360,height:40},
-      captchaVerifyCallback:function(data){
-        var p=data.captchaVerifyParam||data.CaptchaVerifyParam;
-        st.className='status';
-        st.textContent='Dang xac thuc...';
-        fetch('/captcha/callback/'+__UID__,{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({captchaVerifyParam:p})
-        }).then(function(r){return r.json();}).then(function(d){
-          if(d.ok){
-            st.className='status ok';
-            st.textContent='Xac thuc thanh cong!';
-            btn.textContent='Thanh cong';
-          }else{
-            st.className='status err';
-            st.textContent='Loi: '+d.error;
-            btn.classList.remove('loading');
-            btn.textContent='Thu lai';
-          }
-        }).catch(function(e){
-          st.className='status err';
-          st.textContent='Loi gui: '+e.message;
-          btn.classList.remove('loading');
-          btn.textContent='Thu lai';
-        });
-      },
-      onBizResultCallback:function(){
-        btn.classList.remove('loading');
-        btn.textContent='Xac thuc thanh cong';
-      }
-    });
-  }catch(e){
-    st.className='status err';
-    st.textContent='Loi: '+e.message+'. Gui /vmos lai de thu lai.';
-    btn.classList.remove('loading');
-    btn.textContent='Thu lai';
-  }
-}
+(function(){
+var b=document.getElementById('startBtn'),s=document.getElementById('status'),ready=!!(window.AliyunCaptcha&&window.AliyunCaptcha.prototype);
+if(!ready){var ch=setInterval(function(){if(window.AliyunCaptcha&&window.AliyunCaptcha.prototype){ready=true;clearInterval(ch);clearTimeout(f);}},100);var f=setTimeout(function(){clearInterval(ch);s.innerHTML='<span style=background:#fff2f0;color:#ff4d4f;padding:8px 12px;border-radius:6px;display:block>Loi tai SDK. Thu lai bang cach thu cong ben duoi.</span>';b.textContent='Nhap thu cong';},20000);}
+b.onclick=function(){if(!ready){s.innerHTML='<span style=background:#fff2f0;color:#ff4d4f;padding:8px 12px;border-radius:6px;display:block>SDK chua tai xong, cho 1 lat...</span>';return;}
+b.disabled=true;b.textContent='...';s.innerHTML='';
+try{window.AliyunCaptcha({SceneId:'5jvar3wp',prefix:'69r0rc',mode:'popup',element:'#captcha-element',language:'vi',region:'sgp',slideStyle:{width:360,height:40},
+captchaVerifyCallback:function(d){var p=d.captchaVerifyParam||d.CaptchaVerifyParam;
+fetch('/captcha/callback/__UID__',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({captchaVerifyParam:p})}).then(function(r){return r.json();}).then(function(d){if(d.ok){s.innerHTML='<span style=background:#f6ffed;color:#52c41a;padding:8px 12px;border-radius:6px;display:block>Thanh cong!</span>';b.textContent='Thanh cong';}else{s.innerHTML='<span style=background:#fff2f0;color:#ff4d4f;padding:8px 12px;border-radius:6px;display:block>Loi: '+d.error+'</span>';b.disabled=false;b.textContent='Thu lai';}}).catch(function(e){s.innerHTML='<span style=background:#fff2f0;color:#ff4d4f;padding:8px 12px;border-radius:6px;display:block>Loi: '+e.message+'</span>';b.disabled=false;b.textContent='Thu lai';});},
+onBizResultCallback:function(){b.disabled=false;b.textContent='Thanh cong';}});}catch(e){s.innerHTML='<span style=background:#fff2f0;color:#ff4d4f;padding:8px 12px;border-radius:6px;display:block>Loi: '+e.message+'</span>';b.disabled=false;b.textContent='Thu lai';}};
+})();
 </script>
 </body>
 </html>"""
