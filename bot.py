@@ -364,6 +364,7 @@ async def screenshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = "https://" + url
     import urllib.request
     import urllib.parse
+    import json as json_lib
     try:
         api_url = f"https://api.microlink.io/?url={urllib.parse.quote(url)}&screenshot=true"
         req = urllib.request.Request(api_url, headers={"User-Agent": "curl/8.0"})
