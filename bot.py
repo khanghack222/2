@@ -501,19 +501,54 @@ async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         req2 = urllib.request.Request(essay_url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req2, timeout=15) as resp2:
             html2 = resp2.read().decode("utf-8")
-        m = re.search(r'<div class="col-md-7 middle-col">(.*?)</div>\s*</div>\s*</div>', html2, re.DOTALL)
-        content = m.group(1) if m else html2
+
+        # Extract middle-col content with proper depth tracking
+        m = re.search(r'<div[^>]*class="[^"]*(?:col-md-7\s+)?middle-col[^"]*"[^>]*>', html2, re.DOTALL)
+        if m:
+            depth = 1; i = m.end()
+            while i < len(html2) and depth > 0:
+                if html2[i:i+6] == '</div>':
+                    depth -= 1; i += 6
+                elif html2[i:i+4] == '<!--':
+                    end = html2.find('-->', i+4)
+                    i = end + 3 if end > i else i + 1
+                elif html2[i] == '<' and html2[i+1:i+4] == 'div' and html2[i+4:i+5] in (' ', '>', '\n', '\r', '\t'):
+                    depth += 1; i += 4
+                else:
+                    i += 1
+            content = html2[m.end():i-6]
+        else:
+            content = html2
+
         content = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL)
         content = re.sub(r'<style[^>]*>.*?</style>', '', content, flags=re.DOTALL)
         content = re.sub(r'<div class="(pre|nxt)-btn">.*?</div>', '', content, flags=re.DOTALL)
         content = re.sub(r'<div class="social-btn.*?</div>', '', content, flags=re.DOTALL)
         content = re.sub(r'<ul class="box-new-title">.*?</ul>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<div class="(?:box-new|vj-toc|ads_ads|ads_txt).*?</div>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<div[^>]*class="[^"]*bottom(?:google)?ad[^"]*"[^>]*>.*?</div>', '', content, flags=re.DOTALL)
+
+        # Split into sections by anchor tags, keep only essay sections (skip dany/outline)
+        sections = re.split(r'(<a\s+name="[^"]*"\s*></a>)', content)
+        keep_parts = []
+        current_is_dany = False
+        for part in sections:
+            anchor = re.search(r'name="([^"]*)"', part)
+            if anchor:
+                current_is_dany = anchor.group(1) in ('dany', 'dan-y', 'dany')
+                continue
+            if not current_is_dany and part.strip():
+                keep_parts.append(part)
+            if current_is_dany:
+                current_is_dany = False
+
+        content = '\n'.join(keep_parts)
         p_tags = re.findall(r'<p[^>]*>(.*?)</p>', content, re.DOTALL)
         paragraphs = []
         for p in p_tags:
             text = re.sub(r'<[^>]+>', '', p)
             text = html_mod.unescape(text).strip()
-            if len(text) > 30:
+            if len(text) > 30 and 'Mục lục' not in text and 'Quảng cáo' not in text:
                 paragraphs.append(text)
         result = '\n\n'.join(paragraphs)
         if len(result) > 4000:
