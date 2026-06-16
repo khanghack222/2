@@ -457,6 +457,21 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+VAN_BLACKLIST_FILE = "van_blacklist.json"
+
+
+def load_van_blacklist():
+    if os.path.exists(VAN_BLACKLIST_FILE):
+        with open(VAN_BLACKLIST_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
+
+
+def save_van_blacklist(data):
+    with open(VAN_BLACKLIST_FILE, "w") as f:
+        json.dump(list(data), f, indent=2)
+
+
 async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import urllib.request, re, random
     BASE = "https://vietjack.com"
@@ -475,7 +490,14 @@ async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not essays:
             await update.message.reply_text("Không tìm thấy bài văn nào.")
             return
-        essay_url = random.choice(essays)
+        blacklist = load_van_blacklist()
+        available = [e for e in essays if e not in blacklist]
+        if not available:
+            blacklist = set()
+            available = essays
+        essay_url = random.choice(available)
+        blacklist.add(essay_url)
+        save_van_blacklist(blacklist)
         req2 = urllib.request.Request(essay_url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req2, timeout=15) as resp2:
             html2 = resp2.read().decode("utf-8")
