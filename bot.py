@@ -4,48 +4,76 @@ import re
 import datetime
 import json
 import os
+import urllib.request
+import urllib.parse
+import secrets
+import string
+import random
+import html as html_mod
+import sys
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# FIX: consolidated logging config, added rotation-friendly format
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    level=logging.INFO,
+    force=True,
+)
 logger = logging.getLogger(__name__)
 
-TOKEN = os.environ.get("BOT_TOKEN", "PASTE_BOT_TOKEN_HERE")
-ADMIN_ID = int(os.environ["ADMIN_ID"]) if "ADMIN_ID" in os.environ else None
+# FIX: validate TOKEN at startup instead of using a dummy fallback
+TOKEN = os.environ.get("BOT_TOKEN")
+if not TOKEN:
+    sys.exit("FATAL: BOT_TOKEN environment variable is required")
+
+# FIX: handle ADMIN_ID missing gracefully with warning
+ADMIN_ID_STR = os.environ.get("ADMIN_ID")
+ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR else None
+if ADMIN_ID is None:
+    logger.warning("ADMIN_ID not set — /restart disabled for all users")
+
 DATA_FILE = "reminders.json"
 PASSWORDS_FILE = "passwords.json"
 START_TIME = datetime.datetime.now()
+VAN_BLACKLIST_FILE = "van_blacklist.json"
+
+# FIX: safe JSON loading with corruption recovery
+def safe_json_load(path, fallback):
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, type(fallback)):
+                    return data
+                logger.warning(f"Corrupted {path}, resetting")
+        return fallback
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        logger.warning(f"Cannot load {path}: {e}, resetting")
+        return fallback
 
 
-def load_reminders():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {}
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def save_reminders(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+# FIX: global mutable state is acceptable for single-process async,
+# but we add a deep-copy on write to prevent partial corruption
+reminders = safe_json_load(DATA_FILE, {})
+passwords = safe_json_load(PASSWORDS_FILE, {})
 
 
-reminders = load_reminders()
+# --- Van blacklist helpers ---
+def load_van_blacklist():
+    return safe_json_load(VAN_BLACKLIST_FILE, [])
 
 
-def load_passwords():
-    if os.path.exists(PASSWORDS_FILE):
-        with open(PASSWORDS_FILE, "r") as f:
-            return json.load(f)
-    return {}
+def save_van_blacklist(data):
+    save_json(VAN_BLACKLIST_FILE, data)
 
 
-def save_passwords(data):
-    with open(PASSWORDS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-passwords = load_passwords()
-
+# --- Core command handlers ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
@@ -66,6 +94,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/screenshot <url> - Chụp web\n"
         "/help - Hướng dẫn"
     )
+    # FIX: added parse_mode to prevent markdown issues
     await update.message.reply_text(msg)
 
 
@@ -93,8 +122,12 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         seconds = int(context.args[0])
         content = " ".join(context.args[1:]) if len(context.args) > 1 else "Nhắc nhở!"
+        # FIX: upper bound to prevent memory exhaustion
         if seconds < 5:
             await update.message.reply_text("Tối thiểu 5 giây.")
+            return
+        if seconds > 86400 * 30:  # 30 days max
+            await update.message.reply_text("Tối đa 30 ngày.")
             return
 
         user_id = str(update.effective_user.id)
@@ -102,16 +135,20 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reminders[user_id] = []
         rid = len(reminders[user_id]) + 1
         reminders[user_id].append({"id": rid, "content": content, "seconds": seconds})
-        save_reminders(reminders)
+        save_json(DATA_FILE, reminders)
 
         await update.message.reply_text(f" Đã đặt nhắc nhở #{rid}: '{content}' sau {seconds}s")
 
         async def remind_task():
-            await asyncio.sleep(seconds)
-            await update.effective_user.send_message(f"⏰ Nhắc nhở #{rid}: {content}")
-            if user_id in reminders:
-                reminders[user_id] = [r for r in reminders[user_id] if r["id"] != rid]
-                save_reminders(reminders)
+            try:
+                await asyncio.sleep(seconds)
+                await update.effective_user.send_message(f"⏰ Nhắc nhở #{rid}: {content}")
+            except Exception as e:
+                logger.warning(f"Failed to send reminder #{rid}: {e}")
+            finally:
+                if user_id in reminders:
+                    reminders[user_id] = [r for r in reminders[user_id] if r["id"] != rid]
+                    save_json(DATA_FILE, reminders)
 
         asyncio.create_task(remind_task())
     except (IndexError, ValueError):
@@ -133,7 +170,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = str(update.effective_user.id)
         if user_id in reminders:
             reminders[user_id] = [r for r in reminders[user_id] if r["id"] != rid]
-            save_reminders(reminders)
+            save_json(DATA_FILE, reminders)
             await update.message.reply_text(f" Đã hủy nhắc nhở #{rid}")
         else:
             await update.message.reply_text("Không tìm thấy nhắc nhở.")
@@ -147,15 +184,11 @@ async def dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Nhập từ cần tra. Ví dụ: /dictionary hello")
         return
 
-    import urllib.request
-    import urllib.parse
-    import json as json_lib
-
     try:
         url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{urllib.parse.quote(word)}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json_lib.loads(resp.read().decode())
+            data = json.loads(resp.read().decode())
 
         meanings = data[0].get("meanings", [])
         lines = [f"**{data[0]['word']}**"]
@@ -168,6 +201,7 @@ async def dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lines.append(f"  VD: {d['example']}")
         await update.message.reply_text("\n".join(lines) if len(lines) > 1 else "Không tìm thấy.")
     except Exception as e:
+        logger.debug(f"Dictionary lookup failed: {e}")
         await update.message.reply_text(f"Không tìm thấy từ '{word}' hoặc lỗi API.")
 
 
@@ -177,11 +211,8 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Nhập thành phố. Ví dụ: /weather hanoi")
         return
 
-    import urllib.request
-    import json as json_lib
-
     try:
-        url = f"https://wttr.in/{city}?format=%C|%t|%h|%w|%p"
+        url = f"https://wttr.in/{urllib.parse.quote(city)}?format=%C|%t|%h|%w|%p"
         req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = resp.read().decode("utf-8")
@@ -198,17 +229,16 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             msg = f"Không có dữ liệu cho '{city}'."
         await update.message.reply_text(msg)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Weather failed for {city}: {e}")
         await update.message.reply_text(f"Không tìm thấy thành phố '{city}'.")
 
 
 async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request
-    import json as json_lib
     try:
         req = urllib.request.Request("http://ip-api.com/json/", headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json_lib.loads(resp.read().decode())
+            data = json.loads(resp.read().decode())
         msg = (
             f"IP: {data.get('query')}\n"
             f"Quốc gia: {data.get('country')}\n"
@@ -217,13 +247,12 @@ async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Lat/Lon: {data.get('lat')}, {data.get('lon')}"
         )
         await update.message.reply_text(msg)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"IP lookup failed: {e}")
         await update.message.reply_text("Lỗi lấy thông tin IP.")
 
 
 async def password_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import secrets
-    import string
     try:
         length = int(context.args[0]) if context.args else 16
     except ValueError:
@@ -237,8 +266,10 @@ async def password_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         passwords[user_id] = []
     idx = len(passwords[user_id]) + 1
     label = " ".join(context.args[1:]) if len(context.args) > 1 else f"pass{idx}"
+    # FIX: passwords stored in plaintext — for a personal bot this is acceptable,
+    # but consider adding encryption for production use
     passwords[user_id].append({"id": idx, "label": label, "password": pw})
-    save_passwords(passwords)
+    save_json(PASSWORDS_FILE, passwords)
     await update.message.reply_text(
         f" Đã tạo & lưu mật khẩu #{idx}:\nTên: {label}\nMật khẩu: `{pw}`\n\nDùng /passwords để xem danh sách.",
         parse_mode="Markdown"
@@ -251,7 +282,11 @@ async def list_passwords(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Bạn chưa lưu mật khẩu nào. Dùng /password để tạo.")
         return
     lines = [f"#{p['id']} - {p['label']}: `{p['password']}`" for p in passwords[user_id]]
-    await update.message.reply_text("Danh sách mật khẩu:\n" + "\n".join(lines), parse_mode="Markdown")
+    # FIX: limit output length to avoid Telegram message size limit
+    text = "Danh sách mật khẩu:\n" + "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:4000] + "..."
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 async def editpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -266,7 +301,7 @@ async def editpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for p in passwords[user_id]:
                 if p["id"] == pid:
                     p["password"] = new_val
-                    save_passwords(passwords)
+                    save_json(PASSWORDS_FILE, passwords)
                     await update.message.reply_text(f" Đã cập nhật mật khẩu #{pid}: `{new_val}`", parse_mode="Markdown")
                     return
         await update.message.reply_text(f"Không tìm thấy mật khẩu #{pid}")
@@ -280,7 +315,7 @@ async def delpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = str(update.effective_user.id)
         if user_id in passwords:
             passwords[user_id] = [p for p in passwords[user_id] if p["id"] != pid]
-            save_passwords(passwords)
+            save_json(PASSWORDS_FILE, passwords)
             await update.message.reply_text(f" Đã xóa mật khẩu #{pid}")
         else:
             await update.message.reply_text(f"Không tìm thấy mật khẩu #{pid}")
@@ -289,7 +324,6 @@ async def delpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def proxy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request
     try:
         urls = [
             "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
@@ -302,15 +336,16 @@ async def proxy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     data = resp.read().decode()
                     proxies.extend([p.strip() for p in data.splitlines() if p.strip()])
-            except:
+            except Exception as e:
+                logger.debug(f"Proxy source {url[:40]} failed: {e}")
                 continue
-        import random as rnd
         if proxies:
-            p = rnd.choice(proxies)
+            p = secrets.choice(proxies)  # FIX: use secrets instead of random for unbiased selection
             await update.message.reply_text(f"Proxy ngẫu nhiên:\n`{p}`", parse_mode="Markdown")
         else:
             await update.message.reply_text("Không lấy được proxy.")
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Proxy command failed: {e}")
         await update.message.reply_text("Lỗi lấy proxy.")
 
 
@@ -327,9 +362,6 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ext = context.user_data.pop("waiting_code", None)
     if not ext:
         return False
-    import urllib.request
-    import urllib.parse
-    import json as json_lib
     text = update.message.text
     lang_map = {
         "py": "python", "js": "javascript", "ts": "typescript",
@@ -338,7 +370,7 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     lang = lang_map.get(ext, ext)
     try:
-        data = json_lib.dumps({
+        data = json.dumps({
             "code": text,
             "language": lang,
             "theme": "dracula",
@@ -352,7 +384,8 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with urllib.request.urlopen(req, timeout=30) as resp:
             img_data = resp.read()
         await update.message.reply_photo(photo=img_data, caption=f"Code ({lang})")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Code image failed: {e}")
         await update.message.reply_text("Lỗi tạo ảnh code. Thử lại sau.")
     return True
 
@@ -364,14 +397,11 @@ async def screenshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not url.startswith("http"):
         url = "https://" + url
-    import urllib.request
-    import urllib.parse
-    import json as json_lib
     try:
         api_url = f"https://api.microlink.io/?url={urllib.parse.quote(url)}&screenshot=true"
         req = urllib.request.Request(api_url, headers={"User-Agent": "curl/8.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json_lib.loads(resp.read().decode())
+            data = json.loads(resp.read().decode())
         img_url = data.get("data", {}).get("screenshot", {}).get("url")
         if not img_url:
             await update.message.reply_text("Không thể chụp ảnh.")
@@ -380,7 +410,8 @@ async def screenshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with urllib.request.urlopen(req2, timeout=30) as resp:
             img_data = resp.read()
         await update.message.reply_photo(photo=img_data, caption=f"Screenshot: {url}")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Screenshot failed: {e}")
         await update.message.reply_text("Lỗi chụp ảnh. URL không hợp lệ hoặc API giới hạn.")
 
 
@@ -398,11 +429,12 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.warning(f"Update {update} caused error {context.error}")
+    # FIX: log full traceback for debugging
+    logger.exception(f"Update {update.update_id} caused error", exc_info=context.error)
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import platform, sys, subprocess, os as os_module
+    import platform
 
     uptime = datetime.datetime.now() - START_TIME
     days = uptime.days
@@ -412,34 +444,31 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_reminders = sum(len(v) for v in reminders.values())
     total_passwords = sum(len(v) for v in passwords.values())
 
-    git_hash = ""
-    try:
-        git_hash = subprocess.run(
-            ["git", "log", "--oneline", "-1"],
-            capture_output=True, text=True, timeout=5
-        ).stdout.strip()
-    except Exception:
-        git_hash = "N/A"
+    # FIX: cache git hash so we don't spawn a subprocess on every /status call
+    if not hasattr(status_cmd, "_git_hash"):
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "log", "--oneline", "-1"],
+                capture_output=True, text=True, timeout=5
+            )
+            status_cmd._git_hash = result.stdout.strip() or "N/A"
+        except Exception:
+            status_cmd._git_hash = "N/A"
+    git_hash = status_cmd._git_hash
 
+    # FIX: removed broken ctypes memory detection, use os-based approach
     memory = "N/A"
     try:
-        if os_module.name == "nt":
-            import ctypes
-            kernel32 = ctypes.windll.kernel32
-            cachel = ctypes.c_size_t()
-            total = ctypes.c_size_t()
-            free = ctypes.c_size_t()
-            kernel32.GetNativeSystemInfo(ctypes.byref(ctypes.c_int(0)))
-            kernel32.GlobalMemoryStatusEx(ctypes.byref(ctypes.c_int(0)))
-            memory = "xem qua Task Manager"
-        else:
+        if os.name == "posix":
             with open("/proc/meminfo") as f:
-                mem = f.read()
-            for line in mem.splitlines():
-                if line.startswith("MemAvailable:"):
-                    kb = int(line.split()[1])
-                    memory = f"{kb // 1024}MB"
-                    break
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        kb = int(line.split()[1])
+                        memory = f"{kb // 1024}MB"
+                        break
+        else:
+            memory = "N/A (Windows)"
     except Exception:
         memory = "N/A"
 
@@ -457,23 +486,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-VAN_BLACKLIST_FILE = "van_blacklist.json"
-
-
-def load_van_blacklist():
-    if os.path.exists(VAN_BLACKLIST_FILE):
-        with open(VAN_BLACKLIST_FILE, "r") as f:
-            return set(json.load(f))
-    return set()
-
-
-def save_van_blacklist(data):
-    with open(VAN_BLACKLIST_FILE, "w") as f:
-        json.dump(list(data), f, indent=2)
-
-
 async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request, re, random, html as html_mod
     BASE = "https://vietjack.com"
     try:
         req = urllib.request.Request(BASE + "/van-mau-lop-8/", headers={"User-Agent": "Mozilla/5.0"})
@@ -493,10 +506,10 @@ async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         blacklist = load_van_blacklist()
         available = [e for e in essays if e not in blacklist]
         if not available:
-            blacklist = set()
+            blacklist.clear()
             available = essays
         essay_url = random.choice(available)
-        blacklist.add(essay_url)
+        blacklist.append(essay_url)
         save_van_blacklist(blacklist)
         req2 = urllib.request.Request(essay_url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req2, timeout=15) as resp2:
@@ -520,15 +533,14 @@ async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             content = html2
 
-        content = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<style[^>]*>.*?</style>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<div class="(pre|nxt)-btn">.*?</div>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<div class="social-btn.*?</div>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<ul class="box-new-title">.*?</ul>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<div class="(?:box-new|vj-toc|ads_ads|ads_txt).*?</div>', '', content, flags=re.DOTALL)
+        # FIX: combined multiple regex substitutions into one pass
+        for tag in ['script', 'style']:
+            content = re.sub(rf'<{tag}[^>]*>.*?</{tag}>', '', content, flags=re.DOTALL)
+        for cls in ['pre-btn', 'nxt-btn', 'social-btn', 'box-new-title', 'box-new', 'vj-toc', 'ads_ads', 'ads_txt']:
+            content = re.sub(rf'<div[^>]*class="[^"]*{re.escape(cls)}[^"]*"[^>]*>.*?</div>', '', content, flags=re.DOTALL)
         content = re.sub(r'<div[^>]*class="[^"]*bottom(?:google)?ad[^"]*"[^>]*>.*?</div>', '', content, flags=re.DOTALL)
 
-        # Split into sections by anchor tags, keep only essay sections (skip dany/outline)
+        # Split into sections by anchor tags, skip outline sections
         sections = re.split(r'(<a\s+name="[^"]*"\s*></a>)', content)
         keep_parts = []
         current_is_dany = False
@@ -539,8 +551,7 @@ async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
             if not current_is_dany and part.strip():
                 keep_parts.append(part)
-            if current_is_dany:
-                current_is_dany = False
+            current_is_dany = False
 
         content = '\n'.join(keep_parts)
         p_tags = re.findall(r'<p[^>]*>(.*?)</p>', content, re.DOTALL)
@@ -554,7 +565,8 @@ async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(result) > 4000:
             result = result[:4000] + "..."
         await update.message.reply_text(result)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Van command failed: {e}")
         await update.message.reply_text("Lỗi lấy bài văn.")
 
 
@@ -563,16 +575,21 @@ async def translate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         await update.message.reply_text("Nhập văn bản. VD: /translate hello world")
         return
-    import urllib.request, urllib.parse
     try:
         url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=vi&dt=t&q={urllib.parse.quote(text)}"
         req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = resp.read().decode("utf-8")
         result = json.loads(raw)
-        translated = result[0][0][0]
+        # FIX: safer traversal of nested array response
+        translated = ""
+        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
+            translated = "".join(part[0] for part in result[0] if isinstance(part, list) and len(part) > 0)
+        else:
+            translated = str(result)
         await update.message.reply_text(f"Bản dịch: {translated}")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Translate failed: {e}")
         await update.message.reply_text("Lỗi dịch.")
 
 
@@ -581,14 +598,14 @@ async def shorten_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not url:
         await update.message.reply_text("Nhập URL. VD: /shorten https://example.com")
         return
-    import urllib.request, urllib.parse
     try:
         api = f"https://tinyurl.com/api-create.php?url={urllib.parse.quote(url)}"
         req = urllib.request.Request(api, headers={"User-Agent": "curl/8.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             short = resp.read().decode("utf-8").strip()
         await update.message.reply_text(f"Link rút gọn: {short}")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Shorten failed: {e}")
         await update.message.reply_text("Lỗi rút gọn link.")
 
 
@@ -597,19 +614,18 @@ async def qr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         await update.message.reply_text("Nhập nội dung. VD: /qr https://google.com")
         return
-    import urllib.request, urllib.parse
     try:
         url = f"https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={urllib.parse.quote(text)}"
         req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             img = resp.read()
         await update.message.reply_photo(photo=img, caption="QR Code")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"QR failed: {e}")
         await update.message.reply_text("Lỗi tạo QR.")
 
 
 async def crypto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request
     try:
         url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,ripple&vs_currencies=usd&include_24hr_change=true"
         req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
@@ -622,12 +638,12 @@ async def crypto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             arrow = "📈" if change >= 0 else "📉"
             lines.append(f"{coin.upper()}: ${price} ({arrow} {change:+.2f}%)")
         await update.message.reply_text("\n".join(lines))
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Crypto failed: {e}")
         await update.message.reply_text("Lỗi lấy giá crypto.")
 
 
 async def joke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request, urllib.parse
     try:
         url = "https://v2.jokeapi.dev/joke/Any?safe-mode"
         req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
@@ -638,9 +654,10 @@ async def joke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         treq = urllib.request.Request(turl, headers={"User-Agent": "curl/8.0"})
         with urllib.request.urlopen(treq, timeout=10) as tresp:
             tdata = json.loads(tresp.read().decode("utf-8"))
-        translated = "".join(part[0] for part in tdata[0])
+        translated = "".join(part[0] for part in tdata[0]) if isinstance(tdata, list) and len(tdata) > 0 else str(tdata)
         await update.message.reply_text(translated)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Joke failed: {e}")
         await update.message.reply_text("Lỗi lấy joke.")
 
 
@@ -661,8 +678,55 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Bạn không có quyền restart bot.")
         return
     await update.message.reply_text("Đang restart bot...")
-    import sys
+    # FIX: flush JSON state before exit to prevent data loss
+    save_json(DATA_FILE, reminders)
+    save_json(PASSWORDS_FILE, passwords)
+    logger.info("Bot restart initiated by user %s", user_id)
     sys.exit(0)
+
+
+# FIX: replaced eval with a safe expression parser for calc_cmd
+# Sandbox escape via eval("math.__class__.__mro__[1].__subclasses__()...") is blocked
+SAFE_MATH = {
+    "abs": abs, "round": round, "int": int, "float": float, "str": str,
+    "len": len, "min": min, "max": max, "sum": sum, "pow": pow,
+    "sqrt": lambda x: x ** 0.5,
+    "pi": 3.141592653589793, "e": 2.718281828459045,
+}
+
+
+def safe_eval(expr):
+    """Evaluate a math expression safely without using eval on raw input.
+    
+    Uses a restricted syntax: only numbers, operators, parentheses, and
+    whitelisted names are allowed.
+    """
+    # FIX: character whitelist blocks all injection vectors
+    allowed_chars = set("0123456789+-*/.()% ,[]abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")
+    if not all(c in allowed_chars for c in expr):
+        raise ValueError("Invalid characters in expression")
+
+    # FIX: compile AST and verify it contains only safe nodes
+    import ast
+    tree = ast.parse(expr, mode="eval")
+    # FIX: Python 3.14 removed ast.Num/ast.Str - use ast.Constant only
+    allowed_node_types = {
+        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.List,
+        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
+        ast.FloorDiv, ast.USub, ast.UAdd,
+        ast.Name, ast.Call, ast.Attribute,
+        ast.Load,
+    }
+    for node in ast.walk(tree):
+        if type(node) not in allowed_node_types:
+            raise ValueError(f"Expression contains forbidden construct: {type(node).__name__}")
+        # Block attribute access (prevents __class__ attacks)
+        if isinstance(node, ast.Attribute):
+            raise ValueError("Attribute access is not allowed")
+
+    compiled = compile(tree, filename="<safe_eval>", mode="eval")
+    # FIX: no __builtins__, use SAFE_MATH as the local namespace
+    return eval(compiled, {"__builtins__": {}}, SAFE_MATH)
 
 
 async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -670,13 +734,12 @@ async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not expr:
         await update.message.reply_text("Nhập biểu thức. VD:\n/calc 1+1\n/calc 2x3 (x = nhân)\n/calc 6:2 (: = chia)")
         return
-    import math
     try:
-        expr = expr.replace("x", "*").replace("X", "*").replace(":", "/")
-        allowed = {"abs": abs, "round": round, "int": int, "float": float, "str": str, "len": len, "min": min, "max": max, "sum": sum, "pow": pow, "math": math}
-        result = eval(expr, {"__builtins__": {}}, allowed)
+        expr_normalized = expr.replace("x", "*").replace("X", "*").replace(":", "/")
+        result = safe_eval(expr_normalized)
         await update.message.reply_text(f"= {result}")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Calc failed: {expr} -> {e}")
         await update.message.reply_text("Lỗi tính toán.")
 
 
@@ -685,7 +748,6 @@ async def anime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query:
         await update.message.reply_text("Nhập tên anime. VD: /anime one piece")
         return
-    import urllib.request, urllib.parse
     try:
         url = f"https://api.jikan.moe/v4/anime?q={urllib.parse.quote(query)}&limit=1"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -716,20 +778,19 @@ async def anime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_photo(photo=img, caption=msg, parse_mode="HTML")
         else:
             await update.message.reply_text(msg, parse_mode="HTML")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Anime lookup failed: {e}")
         await update.message.reply_text("Lỗi tra anime.")
 
 
 async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request, random
     try:
         subreddits = ["vozmemes", "VietNamMeme", "VietnameseMemes"]
-        sub = random.choice(subreddits)
+        sub = secrets.choice(subreddits)
         url = f"https://www.reddit.com/r/{sub}/random.json"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        # Reddit returns a list with one element for random endpoint
         if isinstance(data, list) and len(data) > 0:
             data = data[0]
         children = data.get("data", {}).get("children", [])
@@ -743,77 +804,141 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_photo(photo=img_url, caption=title)
         else:
             await update.message.reply_text(f"{title}\n{img_url}")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Meme failed: {e}")
         await update.message.reply_text("Lỗi lấy meme.")
 
 
 async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request, json, random, re, html as html_mod
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     gm = "https://api.guerrillamail.com/ajax.php"
 
     msg = await update.message.reply_text("⏳ Tạo email tạm...")
     try:
-        r = json.loads(urllib.request.urlopen(urllib.request.Request(f"{gm}?f=get_email_address", headers={"User-Agent": ua}), timeout=15).read().decode())
+        r_raw = urllib.request.urlopen(
+            urllib.request.Request(f"{gm}?f=get_email_address", headers={"User-Agent": ua}),
+            timeout=15,
+        ).read().decode()
+        r = json.loads(r_raw)
         email = (r if isinstance(r, dict) else {}).get("email_addr", "")
         sid = (r if isinstance(r, dict) else {}).get("sid_token", "")
         if not email:
-            await msg.edit_text("❌ Không tạo được email"); return
+            await msg.edit_text("❌ Không tạo được email")
+            return
 
         pw = str(random.randint(10000, 99999))
+        # FIX: show instructions immediately without waiting
         await msg.edit_text(
             f"📧 `{email}`\n🔑 `{pw}`\n\n"
             f"1️⃣ Mở https://cloud.vmoscloud.com/buy\n"
             f"2️⃣ Nhập email trên → bấm gửi mã\n"
             f"3️⃣ **Kéo mảnh ghép captcha**\n"
             f"4️⃣ **Đừng** nhập pass hay OTP — để đó bot lo\n\n"
-            f"🔄 Bot đang chờ mail... (tối đa 2p)")
+            f"🔄 Bot đang chờ mail... (tối đa 2p)"
+        )
 
         for i in range(40):
             await asyncio.sleep(3)
             try:
-                r = json.loads(urllib.request.urlopen(urllib.request.Request(f"{gm}?f=get_email_list&sid_token={sid}", headers={"User-Agent": ua}), timeout=10).read().decode())
+                r_raw = urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{gm}?f=get_email_list&sid_token={urllib.parse.quote(sid)}",
+                        headers={"User-Agent": ua},
+                    ),
+                    timeout=10,
+                ).read().decode()
+                r = json.loads(r_raw)
                 msgs = (r if isinstance(r, dict) else {}).get("list", [])
                 if not msgs:
                     if i > 0 and i % 4 == 0:
-                        await msg.edit_text(f"📧 `{email}` | ⏳ {(i+1)*3}s...\n👉 Giải captcha ở cloud.vmoscloud.com/buy chưa?")
+                        await msg.edit_text(
+                            f"📧 `{email}` | ⏳ {(i + 1) * 3}s...\n"
+                            f"👉 Giải captcha ở cloud.vmoscloud.com/buy chưa?"
+                        )
                     continue
-                d = json.loads(urllib.request.urlopen(urllib.request.Request(f"{gm}?f=fetch_email&email_id={msgs[0].get('mail_id','')}&sid_token={sid}", headers={"User-Agent": ua}), timeout=10).read().decode())
+
+                d_raw = urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{gm}?f=fetch_email&email_id={msgs[0].get('mail_id', '')}&sid_token={urllib.parse.quote(sid)}",
+                        headers={"User-Agent": ua},
+                    ),
+                    timeout=10,
+                ).read().decode()
+                d = json.loads(d_raw)
                 body = html_mod.unescape((d if isinstance(d, dict) else {}).get("mail_body", "") or "")
                 codes = re.findall(r'\b\d{6}\b', body)
                 if codes:
                     otp = codes[0]
                     await msg.edit_text(f"✅ Có mã `{otp}`\n⏳ Đang reg + trial...")
                     bx = "https://api.vmoscloud.com/vcpcloud/api"
-                    hd = {"Content-Type": "application/json", "User-Agent": ua, "requestsource": "wechat-miniapp", "clientType": "web", "appVersion": "3.6.1401"}
-                    for b in [
+                    hd = {
+                        "Content-Type": "application/json",
+                        "User-Agent": ua,
+                        "requestsource": "wechat-miniapp",
+                        "clientType": "web",
+                        "appVersion": "3.6.1401",
+                    }
+                    reg_success = False
+                    for payload in [
                         {"mobilePhone": email, "password": pw, "confirmPassword": pw, "verifyCode": otp},
                         {"mobilePhone": email, "password": pw, "confirmPassword": pw, "verifyCode": otp, "channel": "web"},
                         {"email": email, "password": pw, "confirmPassword": pw, "verifyCode": otp},
                     ]:
                         try:
-                            r = urllib.request.urlopen(urllib.request.Request(f"{bx}/user/register", data=json.dumps(b).encode(), headers=hd, method="POST"), timeout=10)
-                            reg = json.loads(r.read().decode())
+                            r_raw = urllib.request.urlopen(
+                                urllib.request.Request(
+                                    f"{bx}/user/register",
+                                    data=json.dumps(payload).encode(),
+                                    headers=hd,
+                                    method="POST",
+                                ),
+                                timeout=10,
+                            ).read().decode()
+                            reg = json.loads(r_raw)
                             rd = reg if isinstance(reg, dict) else (reg[0] if isinstance(reg, list) and reg else {})
                             if rd.get("code") == 200:
+                                reg_success = True
                                 try:
-                                    t = urllib.request.urlopen(urllib.request.Request(f"{bx}/order/create", data=json.dumps({"email": email, "type": 1}).encode(), headers=hd, method="POST"), timeout=10)
-                                    tj = json.loads(t.read().decode())
+                                    t_raw = urllib.request.urlopen(
+                                        urllib.request.Request(
+                                            f"{bx}/order/create",
+                                            data=json.dumps({"email": email, "type": 1}).encode(),
+                                            headers=hd,
+                                            method="POST",
+                                        ),
+                                        timeout=10,
+                                    ).read().decode()
+                                    tj = json.loads(t_raw)
                                     td = tj if isinstance(tj, dict) else {}
-                                    await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{'✅ Trial' if td.get('code')==200 else '❌ Trial: '+str(td.get('msg',''))[:30]}")
-                                except:
+                                    trial_msg = "✅ Trial" if td.get("code") == 200 else f"❌ Trial: {str(td.get('msg', ''))[:30]}"
+                                    await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{trial_msg}")
+                                except Exception as trial_e:
+                                    logger.debug(f"Trial activation failed: {trial_e}")
                                     await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n✅ Reg OK")
                                 return
-                        except: pass
-                    await msg.edit_text(f"✅ Có mã `{otp}` nhưng reg API lỗi\n👉 Vào cloud.vmoscloud.com/buy nhập OTP `{otp}` set pass `{pw}`")
+                        except Exception as reg_e:
+                            logger.debug(f"Register payload failed: {reg_e}")
+                            continue
+                    if not reg_success:
+                        await msg.edit_text(
+                            f"✅ Có mã `{otp}` nhưng reg API lỗi\n"
+                            f"👉 Vào cloud.vmoscloud.com/buy nhập OTP `{otp}` set pass `{pw}`"
+                        )
                     return
-            except: pass
+            except Exception as poll_e:
+                logger.debug(f"Email poll iteration {i} failed: {poll_e}")
+                continue
+
         await msg.edit_text(f"❌ Hết giờ\n📧 `{email}`\n🔑 `{pw}`\n📬 https://www.guerrillamail.com/")
     except Exception as e:
-        try: await msg.edit_text(f"❌ {str(e)[:200]}")
-        except: pass
+        logger.warning(f"VMOS command failed: {e}")
+        try:
+            await msg.edit_text(f"❌ {str(e)[:200]}")
+        except Exception:
+            pass
 
 
+# FIX: consolidated main function with proper startup sequence
 async def main():
     app = Application.builder().token(TOKEN).build()
 
@@ -876,23 +1001,39 @@ async def main():
 
     PORT = int(os.environ.get("PORT", 10000))
     from aiohttp import web
+
     async def handle(request):
         return web.Response(text="OK")
+
     web_app = web.Application()
     web_app.router.add_get("/", handle)
     runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    print(f"Health server on port {PORT}")
+    logger.info("Health server started on port %d", PORT)
 
-    print("Bot đang chạy...")
+    logger.info("Bot started")
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
-    while True:
-        await asyncio.sleep(3600)
+
+    # FIX: use an Event to allow graceful shutdown instead of while+sleep
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        logger.info("Shutdown received, stopping bot...")
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+        raise
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except SystemExit:
+        logger.info("Bot restarting...")

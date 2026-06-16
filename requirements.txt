@@ -1,2 +1,4 @@
-python-telegram-bot
-aiohttp
+python-telegram-bot>=20.0
+aiohttp>=3.8.0
+# pytest and pytest-runner are only needed for local testing
+pytest>=8.0; extra == "dev"
