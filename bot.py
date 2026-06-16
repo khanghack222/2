@@ -1392,26 +1392,39 @@ p{color:#666;margin:0 0 20px;font-size:14px}
 <button class="btn" id="startBtn" onclick="showCaptcha()">Bắt đầu xác thực</button>
 <div id="status"></div>
 </div>
-<script src="https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"></script>
 <script>
+var CAPTCHA_SDK_URL = 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js';
+function loadScript(url){
+  return new Promise(function(resolve,reject){
+    var s=document.createElement('script');
+    s.src=url;
+    s.async=true;
+    s.onload=resolve;
+    s.onerror=function(){reject(new Error('Failed to load: '+url));};
+    document.body.appendChild(s);
+  });
+}
 async function showCaptcha(){
-  const btn=document.getElementById('startBtn');
-  const st=document.getElementById('status');
+  var btn=document.getElementById('startBtn');
+  var st=document.getElementById('status');
   btn.classList.add('loading');
   btn.textContent='Đang tải...';
+  st.className='status';
+  st.textContent='Đang tải SDK captcha...';
   try{
-    await new Promise((resolve,reject)=>{
-      if(window.AliyunCaptcha){
-        resolve();
-        return;
-      }
-      const check=()=>{
+    await Promise.race([
+      loadScript(CAPTCHA_SDK_URL),
+      loadScript(window.location.origin+'/captcha/proxy/aliyun_captcha.js?v=1')
+    ]);
+    await new Promise(function(resolve,reject){
+      var check=function(){
         if(window.AliyunCaptcha)resolve();
-        else setTimeout(check,100);
+        else setTimeout(check,200);
       };
-      setTimeout(()=>reject(new Error('Timeout loading captcha SDK')),15000);
+      var timeout=setTimeout(function(){reject(new Error('Timeout'));},20000);
       check();
     });
+    st.textContent='';
     window.AliyunCaptcha({
       SceneId:'5jvar3wp',
       prefix:'69r0rc',
@@ -1421,14 +1434,14 @@ async function showCaptcha(){
       region:'sgp',
       slideStyle:{width:360,height:40},
       captchaVerifyCallback:function(data){
-        const p=data.captchaVerifyParam||data.CaptchaVerifyParam;
+        var p=data.captchaVerifyParam||data.CaptchaVerifyParam;
         st.className='status';
         st.textContent='Dang xac thuc...';
         fetch('/captcha/callback/'+__UID__,{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({captchaVerifyParam:p})
-        }).then(r=>r.json()).then(d=>{
+        }).then(function(r){return r.json();}).then(function(d){
           if(d.ok){
             st.className='status ok';
             st.textContent='Xac thuc thanh cong!';
@@ -1439,7 +1452,7 @@ async function showCaptcha(){
             btn.classList.remove('loading');
             btn.textContent='Thu lai';
           }
-        }).catch(e=>{
+        }).catch(function(e){
           st.className='status err';
           st.textContent='Loi gui: '+e.message;
           btn.classList.remove('loading');
@@ -1453,7 +1466,7 @@ async function showCaptcha(){
     });
   }catch(e){
     st.className='status err';
-    st.textContent='Loi: '+e.message;
+    st.textContent='Loi: '+e.message+'. Gui /vmos lai de thu lai.';
     btn.classList.remove('loading');
     btn.textContent='Thu lai';
   }
@@ -1485,10 +1498,23 @@ async function showCaptcha(){
         logger.info("Captcha token received for user %s", user_id)
         return web.json_response({"ok": True})
 
+    async def captcha_sdk_proxy(request):
+        try:
+            import urllib.request
+            sdk_url = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"
+            req = urllib.request.Request(sdk_url, headers={"User-Agent": "Mozilla/5.0"})
+            resp = urllib.request.urlopen(req, timeout=15)
+            raw = resp.read()
+            return web.Response(body=raw, content_type="application/javascript")
+        except Exception as e:
+            logger.warning("Captcha SDK proxy failed: %s", e)
+            return web.Response(body="console.error('SDK proxy failed')", content_type="application/javascript")
+
     web_app = web.Application()
     web_app.router.add_get("/", handle)
     web_app.router.add_get("/captcha/vmos/{user_id}", captcha_page)
     web_app.router.add_post("/captcha/callback/{user_id}", captcha_callback)
+    web_app.router.add_get("/captcha/proxy/aliyun_captcha.js", captcha_sdk_proxy)
     runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
