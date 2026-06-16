@@ -457,6 +457,40 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import urllib.request, re, random
+    BASE = "https://vietjack.com"
+    try:
+        req = urllib.request.Request(BASE + "/van-mau-lop-8/", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8")
+        links = re.findall(r'href="([^"]+)"', html)
+        essays = []
+        for l in links:
+            if "/van-mau-lop-8/" in l and l.endswith(".jsp") and "index.jsp" not in l:
+                if l.startswith("../"):
+                    essays.append(BASE + l[2:])
+                else:
+                    essays.append(BASE + l)
+        if not essays:
+            await update.message.reply_text("Không tìm thấy bài văn nào.")
+            return
+        essay_url = random.choice(essays)
+        req2 = urllib.request.Request(essay_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req2, timeout=15) as resp2:
+            html2 = resp2.read().decode("utf-8")
+        m = re.search(r'<div[^>]*class="entry-content"[^>]*>(.*?)</div>', html2, re.DOTALL)
+        if not m:
+            m = re.search(r'<article[^>]*>(.*?)</article>', html2, re.DOTALL)
+        content = re.sub(r'<[^>]+>', "", (m.group(1) if m else html2))
+        content = re.sub(r'\s+', " ", content).strip()
+        if len(content) > 4000:
+            content = content[:4000] + "..."
+        await update.message.reply_text(content)
+    except Exception:
+        await update.message.reply_text("Lỗi lấy bài văn.")
+
+
 async def translate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
     if not text:
@@ -608,6 +642,7 @@ async def main():
     app.add_handler(CommandHandler("code", code_cmd))
     app.add_handler(CommandHandler("screenshot", screenshot_cmd))
     app.add_handler(CommandHandler("translate", translate_cmd))
+    app.add_handler(CommandHandler("van", van_cmd))
     app.add_handler(CommandHandler("shorten", shorten_cmd))
     app.add_handler(CommandHandler("qr", qr_cmd))
     app.add_handler(CommandHandler("crypto", crypto_cmd))
