@@ -830,8 +830,8 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # FIX: show instructions immediately without waiting
         await msg.edit_text(
             f"📧 `{email}`\n🔑 `{pw}`\n\n"
-            f"1️⃣ Mở https://cloud.vmoscloud.com/buy\n"
-            f"2️⃣ Nhập email trên → bấm gửi mã\n"
+            f"1️⃣ Mở https://cloud.vmoscloud.com/login\n"
+            f"2️⃣ Nhập email trên → bấm **Gửi mã**\n"
             f"3️⃣ **Kéo mảnh ghép captcha**\n"
             f"4️⃣ **Đừng** nhập pass hay OTP — để đó bot lo\n\n"
             f"🔄 Bot đang chờ mail... (tối đa 2p)"
@@ -853,7 +853,7 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if i > 0 and i % 4 == 0:
                         await msg.edit_text(
                             f"📧 `{email}` | ⏳ {(i + 1) * 3}s...\n"
-                            f"👉 Giải captcha ở cloud.vmoscloud.com/buy chưa?"
+                            f"👉 Vào cloud.vmoscloud.com/login → nhập email → gửi mã → giải captcha"
                         )
                     continue
 
@@ -879,15 +879,18 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "appVersion": "3.6.1401",
                     }
                     reg_success = False
+                    token = None
+                    # Try login endpoint first (covers both login + code_register)
                     for payload in [
-                        {"mobilePhone": email, "password": pw, "confirmPassword": pw, "verifyCode": otp},
-                        {"mobilePhone": email, "password": pw, "confirmPassword": pw, "verifyCode": otp, "channel": "web"},
-                        {"email": email, "password": pw, "confirmPassword": pw, "verifyCode": otp},
+                        {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
+                        {"mobilePhone": email, "password": pw, "verifyCode": otp},
+                        {"email": email, "password": pw, "verifyCode": otp},
                     ]:
                         try:
+                            endpoint = f"{bx}/user/login" if "loginType" in payload else f"{bx}/user/register"
                             r_raw = urllib.request.urlopen(
                                 urllib.request.Request(
-                                    f"{bx}/user/register",
+                                    endpoint,
                                     data=json.dumps(payload).encode(),
                                     headers=hd,
                                     method="POST",
@@ -896,33 +899,53 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             ).read().decode()
                             reg = json.loads(r_raw)
                             rd = reg if isinstance(reg, dict) else (reg[0] if isinstance(reg, list) and reg else {})
-                            if rd.get("code") == 200:
+                            rc = rd.get("code")
+                            if rc == 200:
                                 reg_success = True
-                                try:
-                                    t_raw = urllib.request.urlopen(
-                                        urllib.request.Request(
-                                            f"{bx}/order/create",
-                                            data=json.dumps({"email": email, "type": 1}).encode(),
-                                            headers=hd,
-                                            method="POST",
-                                        ),
-                                        timeout=10,
-                                    ).read().decode()
-                                    tj = json.loads(t_raw)
-                                    td = tj if isinstance(tj, dict) else {}
-                                    trial_msg = "✅ Trial" if td.get("code") == 200 else f"❌ Trial: {str(td.get('msg', ''))[:30]}"
-                                    await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{trial_msg}")
-                                except Exception as trial_e:
-                                    logger.debug(f"Trial activation failed: {trial_e}")
-                                    await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n✅ Reg OK")
-                                return
+                                token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
+                                break
+                            elif rc in (1056, 1059):
+                                if i < 39:
+                                    await msg.edit_text(f"⏳ Mã {otp} sai hoặc chưa kích hoạt, chờ 3s...")
+                                    await asyncio.sleep(3)
+                                continue
                         except Exception as reg_e:
-                            logger.debug(f"Register payload failed: {reg_e}")
+                            logger.debug(f"Payload {list(payload.keys())} failed: {reg_e}")
                             continue
-                    if not reg_success:
+                    if reg_success:
+                        trial_msg = ""
+                        hd2 = {**hd}
+                        if token:
+                            hd2["Token"] = token
+                        # Try to activate trial (try several possible endpoints)
+                        for trial_ep in ["/order/create", "/order/createMoneyOrder", "/cloudTemplate/buyGoodTimeOrder"]:
+                            try:
+                                trial_payload = {}
+                                if "order" in trial_ep:
+                                    trial_payload = {"email": email, "type": 1}
+                                else:
+                                    trial_payload = {"email": email, "type": 1, "goodId": ""}
+                                t_raw = urllib.request.urlopen(
+                                    urllib.request.Request(
+                                        f"{bx}{trial_ep}",
+                                        data=json.dumps(trial_payload).encode(),
+                                        headers=hd2,
+                                        method="POST",
+                                    ),
+                                    timeout=10,
+                                ).read().decode()
+                                tj = json.loads(t_raw)
+                                td = tj if isinstance(tj, dict) else {}
+                                if td.get("code") == 200:
+                                    trial_msg = " | ✅ Trial"
+                                    break
+                            except Exception:
+                                continue
+                        await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`{trial_msg}")
+                    else:
                         await msg.edit_text(
                             f"✅ Có mã `{otp}` nhưng reg API lỗi\n"
-                            f"👉 Vào cloud.vmoscloud.com/buy nhập OTP `{otp}` set pass `{pw}`"
+                            f"👉 Vào cloud.vmoscloud.com/login nhập OTP `{otp}` set pass `{pw}`"
                         )
                     return
             except Exception as poll_e:
