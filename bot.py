@@ -105,6 +105,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 **Học tập:**\n"
         "/van - Văn mẫu lớp 8\n"
         "/dictionary <từ> - Tra từ điển\n\n"
+        "📌 **Lịch:**\n"
+        "/lich - Lịch âm hôm nay\n"
+        "/lich 30/4/2026 - Xem lịch ngày cụ thể\n\n"
         "📌 **VMOS:**\n"
         "/vmos - Tạo VMOS Cloud trial (tự động)\n"
         "/otp <mã> - Nhập OTP thủ công nếu auto lỗi\n\n"
@@ -140,6 +143,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📺 `/anime naruto` — Tra anime Naruto\n\n"
         "😂 `/meme` — Meme ngẫu nhiên từ Reddit\n\n"
         "📝 `/van` — Văn mẫu lớp 8 ngẫu nhiên\n\n"
+        "📅 `/lich` — Lịch âm hôm nay\n"
+        "📅 `/lich 30/4/2026` — Xem ngày cụ thể\n\n"
         "🤖 `/vmos` — Tạo VMOS Cloud trial\n"
         "🤖 `/otp 123456` — Nhập OTP thủ công cho VMOS\n\n"
         "⏰ `/remind 60 Mua sữa` — Nhắc sau 60 giây\n"
@@ -243,30 +248,36 @@ async def dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = " ".join(context.args)
     if not city:
-        await update.message.reply_text("Nhập thành phố. Ví dụ: /weather hanoi")
+        await update.message.reply_text(
+            "🌤 `/weather hanoi` — Thời tiết Hà Nội\n"
+            "🌤 `/weather tuyên quang` — Tuyên Quang\n"
+            "🌤 `/weather hanoi,vi` — Tiếng Việt"
+        )
         return
 
-    try:
-        url = f"https://wttr.in/{urllib.parse.quote(city)}?format=%C|%t|%h|%w|%p"
-        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            raw = resp.read().decode("utf-8")
-        parts = raw.split("|")
-        if len(parts) >= 5:
-            msg = (
-                f" Thời tiết {city.capitalize()}:\n"
-                f"Trạng thái: {parts[0]}\n"
-                f"Nhiệt độ: {parts[1]}\n"
-                f"Độ ẩm: {parts[2]}\n"
-                f"Gió: {parts[3]}\n"
-                f"Mưa: {parts[4]}"
-            )
-        else:
-            msg = f"Không có dữ liệu cho '{city}'."
-        await update.message.reply_text(msg)
-    except Exception as e:
-        logger.debug(f"Weather failed for {city}: {e}")
-        await update.message.reply_text(f"Không tìm thấy thành phố '{city}'.")
+    candidates = [city, f"{city},Vietnam", f"{city},Vn"]
+    for c in candidates:
+        try:
+            url = f"https://wttr.in/{urllib.parse.quote(c)}?format=%C|%t|%h|%w|%p&lang=vi"
+            req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode("utf-8")
+            parts = raw.split("|")
+            if len(parts) >= 5 and not parts[0].startswith("Unknown"):
+                name = city.title()
+                msg = (
+                    f"🌤 **Thời tiết {name}:**\n"
+                    f"☁️ {parts[0]}\n"
+                    f"🌡 {parts[1]}\n"
+                    f"💧 {parts[2]}\n"
+                    f"💨 {parts[3]}\n"
+                    f"🌧 {parts[4]}"
+                )
+                await update.message.reply_text(msg)
+                return
+        except Exception:
+            continue
+    await update.message.reply_text(f"❌ Không tìm thấy '{city}'. Thử /weather hanoi")
 
 
 async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -844,6 +855,60 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi lấy meme.")
 
 
+# --- Lịch âm Việt Nam ---
+_CAN = ['Giáp', 'Ất', 'Bính', 'Đinh', 'Mậu', 'Kỷ', 'Canh', 'Tân', 'Nhâm', 'Quý']
+_CHI = ['Tý', 'Sửu', 'Dần', 'Mão', 'Thìn', 'Tỵ', 'Ngọ', 'Mùi', 'Thân', 'Dậu', 'Tuất', 'Hợi']
+_TIET = ['Xuân', 'Hạ', 'Thu', 'Đông']
+_THU = ['Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy', 'Chủ Nhật']
+
+async def lich_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        import lunardate
+        now = datetime.datetime.now()
+        d = context.args[0] if context.args else None
+        if d:
+            parts = d.replace("/", "-").split("-")
+            if len(parts) == 3:
+                day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+                dt = datetime.date(year, month, day)
+            else:
+                await update.message.reply_text("❌ Định dạng: /lich DD/MM/YYYY")
+                return
+        else:
+            dt = now.date()
+
+        lunar = lunardate.LunarDate.fromSolarDate(dt.year, dt.month, dt.day)
+        can_chi = f"{_CAN[(lunar.year - 4) % 10]} {_CHI[(lunar.year - 4) % 12]}"
+        thang_am = f"Tháng {lunar.month}"
+        ngay_am = f"Ngày {lunar.day}"
+
+        # Tiết khí (approximate — first day of each solar term)
+        # Use solar longitude to determine tiết
+        sol_month = dt.month
+        if dt.day >= 20:
+            sol_month += 1
+        tiet_idx = ((sol_month - 1) % 12) // 3
+        tiet = _TIET[tiet_idx]
+
+        thu = _THU[dt.weekday()]
+        msg = (
+            f"📅 **{dt.day:02d}/{dt.month:02d}/{dt.year}**\n"
+            f"📍 {thu}\n\n"
+            f"🌙 **Âm lịch:** {ngay_am} {thang_am} {can_chi}\n"
+            f"🌸 **Tiết:** {tiet}\n"
+        )
+
+        if lunar.day == 1:
+            msg += "🌑 **Mùng 1 — Sóc**"
+        elif lunar.day == 15:
+            msg += "🌕 **Rằm — Vọng**"
+        await update.message.reply_text(msg)
+    except ImportError:
+        await update.message.reply_text("❌ Thư viện lịch chưa được cài.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Lỗi: {e}")
+
+
 # --- VMOS Cloud (mail.tm + auto-poll OTP) ---
 # In-memory store: user_id -> registration state
 _vmos_registrations: dict[int, dict] = {}
@@ -1170,6 +1235,7 @@ async def main():
         BotCommand("calc", "Máy tính"),
         BotCommand("anime", "Tra anime"),
         BotCommand("meme", "Meme ngẫu nhiên"),
+        BotCommand("lich", "Lịch âm Việt Nam"),
         BotCommand("vmos", "Tạo VMOS Cloud trial"),
         BotCommand("otp", "Nhập mã OTP cho /vmos"),
     ]
@@ -1202,6 +1268,7 @@ async def main():
     app.add_handler(CommandHandler("calc", calc_cmd))
     app.add_handler(CommandHandler("anime", anime_cmd))
     app.add_handler(CommandHandler("meme", meme_cmd))
+    app.add_handler(CommandHandler("lich", lich_cmd))
     app.add_handler(CommandHandler("vmos", vmos_cmd))
     app.add_handler(CommandHandler("otp", otp_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
