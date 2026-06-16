@@ -4,8 +4,10 @@ import re
 import datetime
 import json
 import os
+import time
 import urllib.request
 import urllib.parse
+import urllib.error
 import secrets
 import string
 import random
@@ -62,6 +64,57 @@ def save_json(path, data):
 # but we add a deep-copy on write to prevent partial corruption
 reminders = safe_json_load(DATA_FILE, {})
 passwords = safe_json_load(PASSWORDS_FILE, {})
+
+
+# --- Async HTTP helpers (non-blocking) ---
+# FIX: urllib.urlopen is blocking; calling it directly inside an async handler
+# freezes the whole bot until the request returns. We run it in a thread pool
+# via asyncio.to_thread so other updates keep being processed concurrently.
+DEFAULT_UA = "Mozilla/5.0"
+
+
+class RateLimited(Exception):
+    """Raised when an upstream API returns HTTP 429."""
+
+
+def _fetch_bytes_sync(url, headers=None, data=None, timeout=10):
+    req = urllib.request.Request(url, data=data, headers=headers or {"User-Agent": DEFAULT_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            raise RateLimited(url) from e
+        raise
+
+
+async def fetch_bytes(url, headers=None, data=None, timeout=10):
+    return await asyncio.to_thread(_fetch_bytes_sync, url, headers, data, timeout)
+
+
+async def fetch_text(url, headers=None, data=None, timeout=10, encoding="utf-8"):
+    raw = await fetch_bytes(url, headers=headers, data=data, timeout=timeout)
+    return raw.decode(encoding)
+
+
+async def fetch_json(url, headers=None, data=None, timeout=10):
+    raw = await fetch_bytes(url, headers=headers, data=data, timeout=timeout)
+    return json.loads(raw.decode("utf-8"))
+
+
+# --- Simple TTL cache to cut down on repeat API calls ---
+_cache = {}
+
+
+def cache_get(key, ttl):
+    entry = _cache.get(key)
+    if entry is not None and (time.monotonic() - entry[0]) < ttl:
+        return entry[1]
+    return None
+
+
+def cache_set(key, value):
+    _cache[key] = (time.monotonic(), value)
 
 
 # --- Van blacklist helpers ---
@@ -221,9 +274,7 @@ async def dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{urllib.parse.quote(word)}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
+        data = await fetch_json(url)
 
         meanings = data[0].get("meanings", [])
         lines = [f"**{data[0]['word']}**"]
@@ -250,13 +301,17 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    cache_key = f"weather:{city.lower()}"
+    cached = cache_get(cache_key, ttl=300)
+    if cached:
+        await update.message.reply_text(cached)
+        return
+
     candidates = [city, f"{city},Vietnam", f"{city},Vn"]
     for c in candidates:
         try:
             url = f"https://wttr.in/{urllib.parse.quote(c)}?format=%C|%t|%h|%w|%p&lang=vi"
-            req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                raw = resp.read().decode("utf-8")
+            raw = await fetch_text(url, headers={"User-Agent": "curl/8.0"})
             parts = raw.split("|")
             if len(parts) >= 5 and not parts[0].startswith("Unknown"):
                 name = city.title()
@@ -268,8 +323,12 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"💨 {parts[3]}\n"
                     f"🌧 {parts[4]}"
                 )
+                cache_set(cache_key, msg)
                 await update.message.reply_text(msg)
                 return
+        except RateLimited:
+            await update.message.reply_text("⏳ API thời tiết đang bị giới hạn, thử lại sau.")
+            return
         except Exception:
             continue
     await update.message.reply_text(f"❌ Không tìm thấy '{city}'. Thử /weather hanoi")
@@ -277,9 +336,7 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        req = urllib.request.Request("http://ip-api.com/json/", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
+        data = await fetch_json("http://ip-api.com/json/")
         msg = (
             f"IP: {data.get('query')}\n"
             f"Quốc gia: {data.get('country')}\n"
@@ -373,10 +430,8 @@ async def proxy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         proxies = []
         for url in urls:
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = resp.read().decode()
-                    proxies.extend([p.strip() for p in data.splitlines() if p.strip()])
+                data = await fetch_text(url)
+                proxies.extend([p.strip() for p in data.splitlines() if p.strip()])
             except Exception as e:
                 logger.debug(f"Proxy source {url[:40]} failed: {e}")
                 continue
@@ -417,13 +472,12 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "theme": "dracula",
             "backgroundColor": "rgba(40,44,52,1)",
         }).encode()
-        req = urllib.request.Request(
+        img_data = await fetch_bytes(
             "https://carbon-api.vercel.app/api/code",
             data=data,
             headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+            timeout=30,
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            img_data = resp.read()
         await update.message.reply_photo(photo=img_data, caption=f"Code ({lang})")
     except Exception as e:
         logger.debug(f"Code image failed: {e}")
@@ -440,16 +494,12 @@ async def screenshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = "https://" + url
     try:
         api_url = f"https://api.microlink.io/?url={urllib.parse.quote(url)}&screenshot=true"
-        req = urllib.request.Request(api_url, headers={"User-Agent": "curl/8.0"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
+        data = await fetch_json(api_url, headers={"User-Agent": "curl/8.0"}, timeout=30)
         img_url = data.get("data", {}).get("screenshot", {}).get("url")
         if not img_url:
             await update.message.reply_text("Không thể chụp ảnh.")
             return
-        req2 = urllib.request.Request(img_url, headers={"User-Agent": "curl/8.0"})
-        with urllib.request.urlopen(req2, timeout=30) as resp:
-            img_data = resp.read()
+        img_data = await fetch_bytes(img_url, headers={"User-Agent": "curl/8.0"}, timeout=30)
         await update.message.reply_photo(photo=img_data, caption=f"Screenshot: {url}")
     except Exception as e:
         logger.debug(f"Screenshot failed: {e}")
@@ -530,9 +580,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BASE = "https://vietjack.com"
     try:
-        req = urllib.request.Request(BASE + "/van-mau-lop-8/", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8")
+        html = await fetch_text(BASE + "/van-mau-lop-8/", timeout=15)
         links = re.findall(r'href="([^"]+)"', html)
         essays = []
         for l in links:
@@ -552,9 +600,7 @@ async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         essay_url = random.choice(available)
         blacklist.append(essay_url)
         save_van_blacklist(blacklist)
-        req2 = urllib.request.Request(essay_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req2, timeout=15) as resp2:
-            html2 = resp2.read().decode("utf-8")
+        html2 = await fetch_text(essay_url, timeout=15)
 
         # Extract middle-col content with proper depth tracking
         m = re.search(r'<div[^>]*class="[^"]*(?:col-md-7\s+)?middle-col[^"]*"[^>]*>', html2, re.DOTALL)
@@ -618,10 +664,7 @@ async def translate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=vi&dt=t&q={urllib.parse.quote(text)}"
-        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            raw = resp.read().decode("utf-8")
-        result = json.loads(raw)
+        result = await fetch_json(url, headers={"User-Agent": "curl/8.0"})
         # FIX: safer traversal of nested array response
         translated = ""
         if isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
@@ -641,9 +684,7 @@ async def shorten_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         api = f"https://tinyurl.com/api-create.php?url={urllib.parse.quote(url)}"
-        req = urllib.request.Request(api, headers={"User-Agent": "curl/8.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            short = resp.read().decode("utf-8").strip()
+        short = (await fetch_text(api, headers={"User-Agent": "curl/8.0"})).strip()
         await update.message.reply_text(f"Link rút gọn: {short}")
     except Exception as e:
         logger.debug(f"Shorten failed: {e}")
@@ -657,9 +698,7 @@ async def qr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         url = f"https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={urllib.parse.quote(text)}"
-        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            img = resp.read()
+        img = await fetch_bytes(url, headers={"User-Agent": "curl/8.0"}, timeout=15)
         await update.message.reply_photo(photo=img, caption="QR Code")
     except Exception as e:
         logger.debug(f"QR failed: {e}")
@@ -667,18 +706,24 @@ async def qr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def crypto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cached = cache_get("crypto", ttl=60)
+    if cached:
+        await update.message.reply_text(cached)
+        return
     try:
         url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,ripple&vs_currencies=usd&include_24hr_change=true"
-        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
+        data = await fetch_json(url, headers={"User-Agent": "curl/8.0"})
         lines = ["Giá Crypto (USD):"]
         for coin, info in data.items():
             price = info["usd"]
             change = info.get("usd_24h_change", 0)
             arrow = "📈" if change >= 0 else "📉"
             lines.append(f"{coin.upper()}: ${price} ({arrow} {change:+.2f}%)")
-        await update.message.reply_text("\n".join(lines))
+        result = "\n".join(lines)
+        cache_set("crypto", result)
+        await update.message.reply_text(result)
+    except RateLimited:
+        await update.message.reply_text("⏳ API crypto đang bị giới hạn, thử lại sau ít phút.")
     except Exception as e:
         logger.debug(f"Crypto failed: {e}")
         await update.message.reply_text("Lỗi lấy giá crypto.")
@@ -687,14 +732,10 @@ async def crypto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def joke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         url = "https://v2.jokeapi.dev/joke/Any?safe-mode"
-        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
+        data = await fetch_json(url, headers={"User-Agent": "curl/8.0"})
         text = data.get("joke") or (data["setup"] + "\n" + data["delivery"])
         turl = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=vi&dt=t&q=" + urllib.parse.quote(text)
-        treq = urllib.request.Request(turl, headers={"User-Agent": "curl/8.0"})
-        with urllib.request.urlopen(treq, timeout=10) as tresp:
-            tdata = json.loads(tresp.read().decode("utf-8"))
+        tdata = await fetch_json(turl, headers={"User-Agent": "curl/8.0"})
         translated = "".join(part[0] for part in tdata[0]) if isinstance(tdata, list) and len(tdata) > 0 else str(tdata)
         await update.message.reply_text(translated)
     except Exception as e:
@@ -791,9 +832,7 @@ async def anime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         url = f"https://api.jikan.moe/v4/anime?q={urllib.parse.quote(query)}&limit=1"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        data = await fetch_json(url)
         if not data.get("data"):
             await update.message.reply_text("Không tìm thấy anime.")
             return
@@ -819,6 +858,8 @@ async def anime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_photo(photo=img, caption=msg, parse_mode="HTML")
         else:
             await update.message.reply_text(msg, parse_mode="HTML")
+    except RateLimited:
+        await update.message.reply_text("⏳ API anime đang bị giới hạn, thử lại sau ít giây.")
     except Exception as e:
         logger.debug(f"Anime lookup failed: {e}")
         await update.message.reply_text("Lỗi tra anime.")
@@ -829,9 +870,7 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subreddits = ["vozmemes", "VietNamMeme", "VietnameseMemes"]
         sub = secrets.choice(subreddits)
         url = f"https://www.reddit.com/r/{sub}/random.json"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        data = await fetch_json(url)
         if isinstance(data, list) and len(data) > 0:
             data = data[0]
         children = data.get("data", {}).get("children", [])
@@ -845,6 +884,8 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_photo(photo=img_url, caption=title)
         else:
             await update.message.reply_text(f"{title}\n{img_url}")
+    except RateLimited:
+        await update.message.reply_text("⏳ Reddit đang bị giới hạn, thử lại sau.")
     except Exception as e:
         logger.debug(f"Meme failed: {e}")
         await update.message.reply_text("Lỗi lấy meme.")
