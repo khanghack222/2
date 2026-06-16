@@ -11,6 +11,7 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("BOT_TOKEN", "PASTE_BOT_TOKEN_HERE")
+ADMIN_ID = int(os.environ["ADMIN_ID"]) if "ADMIN_ID" in os.environ else None
 DATA_FILE = "reminders.json"
 PASSWORDS_FILE = "passwords.json"
 
@@ -399,6 +400,16 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.warning(f"Update {update} caused error {context.error}")
 
 
+async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if ADMIN_ID is not None and user_id != ADMIN_ID:
+        await update.message.reply_text("Bạn không có quyền restart bot.")
+        return
+    await update.message.reply_text("Đang restart bot...")
+    import sys
+    sys.exit(0)
+
+
 async def run_bot(app):
     await app.initialize()
     await app.start()
@@ -442,6 +453,7 @@ async def main():
     app.add_handler(CommandHandler("proxy", proxy_cmd))
     app.add_handler(CommandHandler("code", code_cmd))
     app.add_handler(CommandHandler("screenshot", screenshot_cmd))
+    app.add_handler(CommandHandler("restart", restart_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
 
