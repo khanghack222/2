@@ -1106,12 +1106,12 @@ async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, pw, info_msg
                     f"1️⃣ Mở https://cloud.vmoscloud.com/login\n"
                     f"2️⃣ Nhập email, dán OTP `{otp}`, set pass `{pw}`\n"
                     f"3️⃣ Bấm đăng ký\n\n"
-                    f"⏳ Bot chờ 40s rồi tự login + trial...",
+                     f"⏳ Bot chờ 90s rồi tự login + trial...",
                     chat_id=chat_id, message_id=info_msg.message_id,
                 )
 
                 # Wait for user to register manually
-                await asyncio.sleep(40)
+                await asyncio.sleep(90)
 
                 # Now try to login with password
                 import hashlib
@@ -1204,9 +1204,9 @@ async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
         f"ℹ️ Mở https://cloud.vmoscloud.com/login\n"
         f"Nhập email, OTP `{otp}`, pass `{pw}` → đăng ký xong ✅\n"
-        f"Bot chờ 40s rồi auto login + trial..."
+        f"Bot chờ 90s rồi auto login + trial..."
     )
-    await asyncio.sleep(40)
+    await asyncio.sleep(90)
 
     import hashlib
     pw_md5 = hashlib.md5(pw.encode()).hexdigest()
