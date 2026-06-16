@@ -749,124 +749,75 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import urllib.request, urllib.parse, json, random, urllib.error, html as html_mod
-
-    async def st(t):
-        nonlocal msg
-        try: await msg.edit_text(t, parse_mode="Markdown")
-        except: pass
-
-    def jget(url, data=None, method=None, headers=None):
-        try:
-            r = urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers or {}, method=method), timeout=15)
-            j = json.loads(r.read().decode())
-            return j if isinstance(j, dict) else (j[0] if isinstance(j, list) and j else {})
-        except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")[:300]
-            raise Exception(f"[{e.code}] {url[:80]}: {body}")
-
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     gm = "https://api.guerrillamail.com/ajax.php"
 
-    msg = await update.message.reply_text("⏳ [1/5] Tạo email...")
+    msg = await update.message.reply_text("⏳ Đang tạo email...")
     try:
-        r = jget(f"{gm}?f=get_email_address", headers={"User-Agent": ua})
-        email = r.get("email_addr", "")
-        sid = r.get("sid_token", "")
+        r = json.loads(urllib.request.urlopen(urllib.request.Request(f"{gm}?f=get_email_address", headers={"User-Agent": ua}), timeout=15).read().decode())
+        email = (r if isinstance(r, dict) else {}).get("email_addr", "")
+        sid = (r if isinstance(r, dict) else {}).get("sid_token", "")
         if not email:
-            await st("❌ Không tạo được email tạm"); return
+            await msg.edit_text("❌ Không tạo được email tạm"); return
 
+        pw = str(random.randint(10000, 99999))
         bx = "https://api.vmoscloud.com/vcpcloud/api"
         hd = {"Content-Type": "application/json", "Accept-Language": "vi", "clientType": "web",
-            "appVersion": "3.6.1401", "requestsource": "wechat-miniapp", "SupplierType": "0",
-            "User-Agent": ua}
-        pw = str(random.randint(10000, 99999))
-
-        await st(f"⏳ [2/5] Kiểm tra email `{email}`...")
-        ck = jget(f"{bx}/user/checkEmail?mobilePhone={urllib.parse.quote(email)}", headers=hd)
-        if ck.get("data") is not True:
-            await st(f"⚠️ Email không khả dụng"); return
-
-        await st(f"⏳ [3/5] Gửi mã...")
-        sms = None; sms_msg = ""
-        variants = [
-            {"smsType": 2, "mobilePhone": email},
-            {"smsType": 2, "mobilePhone": email, "captchaVerifyParam": ""},
-            {"smsType": 2, "mobilePhone": email, "captchaVerifyParam": "{}"},
-            {"smsType": 0, "mobilePhone": email},
-            {"smsType": 1, "mobilePhone": email},
-            {"smsType": 2, "email": email, "mobilePhone": email},
+            "appVersion": "3.6.1401", "requestsource": "wechat-miniapp", "SupplierType": "0", "User-Agent": ua}
+        paths = ["/user/register", "/user/create", "/user/registerByEmail", "/user/signup", "/api/register", "/api/user/register"]
+        bodies = [
+            {"email": email, "password": pw, "confirmPassword": pw},
+            {"email": email, "password": pw},
+            {"mobilePhone": email, "password": pw, "confirmPassword": pw},
+            {"email": email, "password": pw, "confirmPassword": pw, "channel": "web"},
+            {"email": email, "password": pw, "confirmPassword": pw, "sourceType": 0},
+            {"email": email, "password": pw, "confirmPassword": pw, "smsType": 0},
+            {"email": email, "password": pw, "confirmPassword": pw, "verifyCode": ""},
         ]
-        sources = [("wechat-miniapp","web"), ("android","app"), ("ios","app"),
-                   ("miniapp","miniapp"), ("web","web"), ("app","app")]
+        sources = [("wechat-miniapp","web"), ("android","app"), ("ios","app"), ("miniapp","miniapp"), ("web","web"), ("app","app")]
+
+        await msg.edit_text(f"⏳ Đang reg `{email}`...")
+        reg_ok = False
         for rs, ct in sources:
             hd2 = {**hd, "requestsource": rs, "clientType": ct}
-            for b in variants:
-                try:
-                    r = jget(f"{bx}/sms/smsSend", data=json.dumps(b).encode(), headers=hd2, method="POST")
-                    if r.get("code") == 200: sms = r; break
-                    sms_msg = r.get("msg", r.get("message", str(r)[:100]))
-                except Exception as ex:
-                    sms_msg = str(ex)[:100]
-            if sms: break
-
-        if sms:
-            await st(f"✅ [3/5] Đã gửi\n⏳ [4/5] Đợi mail...")
-            otp = None
-            for i in range(25):
-                await asyncio.sleep(3)
-                try:
-                    lst = jget(f"{gm}?f=get_email_list&sid_token={urllib.parse.quote(sid)}", headers={"User-Agent": ua})
-                    msgs = lst.get("list", [])
-                    if msgs:
-                        det = jget(f"{gm}?f=fetch_email&email_id={msgs[0].get('mail_id','')}&sid_token={urllib.parse.quote(sid)}", headers={"User-Agent": ua})
-                        body = html_mod.unescape(det.get("mail_body", "") or "")
-                        codes = re.findall(r'\b\d{6}\b', body)
-                        if codes:
-                            otp = codes[0]; break
-                except: pass
-                if i % 3 == 2:
-                    await st(f"✅ [3/5] Đã gửi\n⏳ [4/5] Đợi ({(i+1)*3}s)...")
-
-            if otp:
-                await st(f"✅ [4/5] Mã: `{otp}`\n⏳ [5/5] Đăng ký...")
-                reg = jget(f"{bx}/user/register",
-                    data=json.dumps({"email": email, "password": pw, "confirmPassword": pw, "verifyCode": otp}).encode(),
-                    headers=hd, method="POST")
-                if reg.get("code") == 200:
-                    await st(f"⏳ Mua trial...")
-                    trial = jget(f"{bx}/order/create",
-                        data=json.dumps({"email": email, "type": 1}).encode(),
-                        headers=hd, method="POST")
-                    await st(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{'✅ Trial OK' if trial.get('code')==200 else '❌ Trial: '+str(trial.get('msg',''))[:50]}")
-                    return
-                sms_msg = reg.get("msg", "Lỗi reg")
-        else:
-            await st(f"⏳ [3b/5] Register thẳng...")
-            reg = None; reg_msg = ""
-            reg_bodies = [
-                {"email": email, "password": pw, "confirmPassword": pw},
-                {"email": email, "password": pw},
-                {"email": email, "password": pw, "confirmPassword": pw, "channel": "web"},
-                {"mobilePhone": email, "password": pw, "confirmPassword": pw},
-                {"email": email, "password": pw, "confirmPassword": pw, "sourceType": 0},
-            ]
-            for b in reg_bodies:
-                try:
-                    reg = jget(f"{bx}/user/register", data=json.dumps(b).encode(), headers=hd, method="POST")
-                    if reg.get("code") == 200: break
-                    reg_msg = reg.get("msg", str(reg)[:100])
-                except Exception as ex:
-                    reg_msg = str(ex)[:100]
-            if reg and reg.get("code") == 200:
-                await st(f"⏳ Mua trial...")
-                trial = jget(f"{bx}/order/create",
-                    data=json.dumps({"email": email, "type": 1}).encode(),
-                    headers=hd, method="POST")
-                await st(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{'✅ Trial OK' if trial.get('code')==200 else '❌ Trial: '+str(trial.get('msg',''))[:50]}")
-                return
-            await st(f"❌ {reg_msg or sms_msg}\n📧 `{email}`\n👉 cloud.vmos.com"); return
+            for p in paths:
+                for b in bodies:
+                    try:
+                        r = urllib.request.urlopen(urllib.request.Request(f"{bx}{p}", data=json.dumps(b).encode(), headers=hd2, method="POST"), timeout=10)
+                        j = json.loads(r.read().decode())
+                        d = j if isinstance(j, dict) else (j[0] if isinstance(j, list) and j else {})
+                        if d.get("code") == 200:
+                            await msg.edit_text(f"⏳ Mua trial...")
+                            try:
+                                t = urllib.request.urlopen(urllib.request.Request(f"{bx}/order/create", data=json.dumps({"email": email, "type": 1}).encode(), headers=hd, method="POST"), timeout=10)
+                                tj = json.loads(t.read().decode())
+                                td = tj if isinstance(tj, dict) else {}
+                                await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{'✅ Trial' if td.get('code')==200 else '❌ '+str(td.get('msg',''))[:30]}")
+                            except:
+                                await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n✅ Reg OK (trial fail)")
+                            reg_ok = True; raise StopIteration
+                    except StopIteration:
+                        raise
+                    except:
+                        pass
+            if reg_ok: break
+        
+        if not reg_ok:
+            # Guide mode
+            await msg.edit_text(
+                f"❌ Không reg tự động được (captcha)\n\n"
+                f"📧 **Email:** `{email}`\n🔑 **Pass:** `{pw}`\n"
+                f"📬 https://www.guerrillamail.com/\n\n"
+                f"👉 Vào link rồi reg tay:\n"
+                f"https://cloud.vmos.com/register\n"
+                f"Xong nhập email này → lấy mã → set pass `{pw}`\n"
+                f"Bật tab Guerrilla Mail để nhận mã."
+            )
+    except StopIteration:
+        pass
     except Exception as e:
-        await st(f"❌ {str(e)[:200]}")
+        try: await msg.edit_text(f"❌ {str(e)[:200]}")
+        except: pass
 
 
 async def main():
