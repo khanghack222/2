@@ -755,115 +755,83 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: await msg.edit_text(t, parse_mode="Markdown")
         except: pass
 
-    msg = await update.message.reply_text("⏳ [1/5] Đang tạo email tạm...")
+    msg = await update.message.reply_text("⏳ [1/5] Tạo email...")
     try:
-        # Generate email via mail.tm (reliable, no captcha)
-        import ssl
-        ctx = ssl.create_default_context()
-        
-        await st(f"⏳ [1/5] Tạo email...")
         mail_user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
         mail_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-        
-        # Get available domains
-        dom_req = urllib.request.Request("https://api.mail.tm/domains", headers={"Accept": "application/json"})
-        with urllib.request.urlopen(dom_req, timeout=10, context=ctx) as r:
-            domains = json.loads(r.read().decode()).get("hydra:member", [])
-        domain = domains[0]["domain"] if domains else "@mail.tm"
-        
-        # Create account
-        acc_data = json.dumps({"address": f"{mail_user}@{domain}", "password": mail_pass}).encode()
-        acc_req = urllib.request.Request("https://api.mail.tm/accounts", data=acc_data,
-            headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(acc_req, timeout=10, context=ctx) as r:
-            acc = json.loads(r.read().decode())
-        email = acc.get("address", f"{mail_user}@{domain}")
-        
-        # Get token
-        tok_data = json.dumps({"address": email, "password": mail_pass}).encode()
-        tok_req = urllib.request.Request("https://api.mail.tm/token", data=tok_data,
-            headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(tok_req, timeout=10, context=ctx) as r:
-            token = json.loads(r.read().decode()).get("token", "")
-        mail_headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+        dom = json.loads(urllib.request.urlopen(
+            urllib.request.Request("https://api.mail.tm/domains", headers={"Accept": "application/json"}),
+            timeout=10).read().decode()).get("hydra:member", [{}])[0].get("domain", "mail.tm")
+        email = f"{mail_user}@{dom}"
+
+        acc = json.loads(urllib.request.urlopen(urllib.request.Request("https://api.mail.tm/accounts",
+            data=json.dumps({"address": email, "password": mail_pass}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST"), timeout=10).read().decode())
+        email = acc.get("address", email)
+
+        tok = json.loads(urllib.request.urlopen(urllib.request.Request("https://api.mail.tm/token",
+            data=json.dumps({"address": email, "password": mail_pass}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST"), timeout=10).read().decode())
+        token = tok.get("token", "")
+        mh = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+        bx = "https://api.vmoscloud.com/vcpcloud/api"
+        hd = {"Content-Type": "application/json", "Accept-Language": "vi", "clientType": "web",
+            "appVersion": "3.6.1401", "requestsource": "wechat-miniapp", "SupplierType": "0"}
 
         await st(f"⏳ [2/5] Kiểm tra email `{email}`...")
-        headers = {
-            "Content-Type": "application/json",
-            "Accept-Language": "vi", "clientType": "web",
-            "appVersion": "3.6.1401", "requestsource": "wechat-miniapp",
-            "SupplierType": "0",
-        }
-        base = "https://api.vmoscloud.com/vcpcloud/api"
-        ck = urllib.request.Request(f"{base}/user/checkEmail?mobilePhone={urllib.parse.quote(email)}", headers=headers)
-        with urllib.request.urlopen(ck, timeout=10) as r:
-            if json.loads(r.read().decode()).get("data") is not True:
-                await st(f"⚠️ Email `{email}` không khả dụng")
-                return
+        ck = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"{bx}/user/checkEmail?mobilePhone={urllib.parse.quote(email)}", headers=hd),
+            timeout=10).read().decode())
+        if ck.get("data") is not True:
+            await st(f"⚠️ Email không khả dụng"); return
 
-        await st(f"⏳ [3/5] Gửi mã xác thực...")
-        sms_ok = False; sms_err = "..."
-        for body in [
-            {"smsType": 2, "mobilePhone": email, "captchaVerifyParam": ""},
-            {"smsType": 2, "mobilePhone": email},
-        ]:
+        await st(f"⏳ [3/5] Gửi mã...")
+        sms = None
+        for b in [{"smsType": 2, "mobilePhone": email}, {"smsType": 2, "mobilePhone": email, "captchaVerifyParam": ""}]:
             try:
-                req = urllib.request.Request(f"{base}/sms/smsSend", data=json.dumps(body).encode(), headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=10) as r:
-                    res = json.loads(r.read().decode())
-                if res.get("code") == 200:
-                    sms_ok = True; break
-                sms_err = res.get("msg", "Lỗi")
+                r = json.loads(urllib.request.urlopen(urllib.request.Request(f"{bx}/sms/smsSend",
+                    data=json.dumps(b).encode(), headers=hd, method="POST"), timeout=10).read().decode())
+                if r.get("code") == 200: sms = r; break
             except: continue
+        if not sms:
+            await st(f"❌ [3/5] Gửi mã thất bại\n📧 `{email}`\n👉 Reg tay: cloud.vmos.com"); return
 
-        if not sms_ok:
-            await st(f"❌ [3/5] {sms_err}\n📧 `{email}`\n👉 Reg tay: cloud.vmos.com")
-            return
-
-        await st(f"✅ [3/5] Đã gửi mã\n⏳ [4/5] Đợi mail...")
+        await st(f"✅ [3/5] Đã gửi\n⏳ [4/5] Đợi mail...")
         for i in range(20):
             await asyncio.sleep(3)
             try:
-                msg_req = urllib.request.Request("https://api.mail.tm/messages", headers=mail_headers)
-                with urllib.request.urlopen(msg_req, timeout=10, context=ctx) as r:
-                    msgs = json.loads(r.read().decode()).get("hydra:member", [])
-                if msgs:
-                    mid = msgs[0]["id"]
-                    det_req = urllib.request.Request(f"https://api.mail.tm/messages/{mid}", headers=mail_headers)
-                    with urllib.request.urlopen(det_req, timeout=10, context=ctx) as r:
-                        mail = json.loads(r.read().decode())
-                    from_h = mail.get("from", {}).get("address", "")
-                    subject = mail.get("subject", "")
-                    body_html = mail.get("html", [{}])[0].get("value", "") if mail.get("html") else ""
-                    body_text = mail.get("text", [{}])[0].get("value", "") if mail.get("text") else ""
-                    full = body_text or body_html
-                    # Try multiple code patterns
-                    codes = re.findall(r'(?:code|mã|mã số|OTP)[:\s]*(\d{4,8})', full, re.IGNORECASE)
-                    if not codes:
-                        codes = re.findall(r'\b(\d{6})\b', full)
-                    if not codes:
-                        codes = re.findall(r'(\d{4,8})', full)  # broad match
+                ms = json.loads(urllib.request.urlopen(
+                    urllib.request.Request("https://api.mail.tm/messages", headers=mh), timeout=10).read().decode())
+                ml = ms.get("hydra:member", [])
+                if ml:
+                    d = json.loads(urllib.request.urlopen(
+                        urllib.request.Request(f"https://api.mail.tm/messages/{ml[0]['id']}", headers=mh),
+                        timeout=10).read().decode())
+                    body = ""
+                    for part in (d.get("html") or []):
+                        body += part.get("value", "")
+                    for part in (d.get("text") or []):
+                        body += part.get("value", "")
+                    codes = re.findall(r'\b\d{6}\b', body)
                     if codes:
                         await st(f"✅ [4/5] Mã: `{codes[0]}`\n⏳ [5/5] Đăng nhập...")
-                        lr = urllib.request.Request(f"{base}/user/login",
+                        lr = json.loads(urllib.request.urlopen(urllib.request.Request(f"{bx}/user/login",
                             data=json.dumps({"mobilePhone": email, "loginType": 0, "verifyCode": codes[0], "channel": "web"}).encode(),
-                            headers=headers, method="POST")
-                        with urllib.request.urlopen(lr, timeout=10) as r:
-                            res = json.loads(r.read().decode())
-                        if res.get("code") == 200:
-                            t = res.get("data", {}).get("token", "")
+                            headers=hd, method="POST"), timeout=10).read().decode())
+                        if lr.get("code") == 200:
+                            t = lr.get("data", {}).get("token", "")
                             await st(f"🎉 **Hoàn tất!**\n📧 `{email}`\n🔑 Token: `{t[:50]}...`\n⏱ Trial 2h")
                         else:
-                            await st(f"❌ [5/5] {res.get('msg', 'Lỗi')}\n📧 `{email}`\n🔑 Mã: `{codes[0]}`")
+                            await st(f"❌ [5/5] {lr.get('msg', 'Lỗi')}\n📧 `{email}`\n🔑 Mã: `{codes[0]}`")
                         return
-                    else:
-                        await st(f"✅ [3/5] Đã gửi mã\n⏳ [4/5] Có mail từ {from_h}: '{subject}' - tìm mã...")
-                await st(f"✅ [3/5] Đã gửi mã\n⏳ [4/5] Đợi mail ({(i+1)*3}s)...")
+                await st(f"✅ [3/5] Đã gửi\n⏳ [4/5] Đợi ({(i+1)*3}s)...")
             except:
-                await st(f"✅ [3/5] Đã gửi mã\n⏳ [4/5] Đợi mail ({(i+1)*3}s)...")
-        await st(f"❌ Hết giờ.\n📧 `{email}`\n📨 `{mail_pass}`")
+                await st(f"✅ [3/5] Đã gửi\n⏳ [4/5] Đợi ({(i+1)*3}s)...")
+        await st(f"❌ Hết giờ\n📧 `{email}`\n🔑 `{mail_pass}`")
     except Exception as e:
-        await st(f"❌ Lỗi: {str(e)[:200]}")
+        await st(f"❌ {str(e)[:200]}")
 
 
 async def main():
