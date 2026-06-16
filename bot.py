@@ -914,6 +914,7 @@ async def lich_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 _vmos_registrations: dict[int, dict] = {}
 _vmos_poll_tasks: dict[int, asyncio.Task] = {}
 _vmos_captcha_tokens: dict[int, str] = {}
+_vmos_captcha_sdk_cache: bytes | None = None
 
 _BX = "https://api.vmoscloud.com/vcpcloud/api"
 _VMOS_HD = {
@@ -1393,37 +1394,24 @@ p{color:#666;margin:0 0 20px;font-size:14px}
 <div id="status"></div>
 </div>
 <script>
-var CAPTCHA_SDK_URL = 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js';
-function loadScript(url){
-  return new Promise(function(resolve,reject){
-    var s=document.createElement('script');
-    s.src=url;
-    s.async=true;
-    s.onload=resolve;
-    s.onerror=function(){reject(new Error('Failed to load: '+url));};
-    document.body.appendChild(s);
-  });
-}
 async function showCaptcha(){
   var btn=document.getElementById('startBtn');
   var st=document.getElementById('status');
   btn.classList.add('loading');
   btn.textContent='Đang tải...';
   st.className='status';
-  st.textContent='Đang tải SDK captcha...';
+  st.textContent='Dang tai SDK captcha...';
   try{
-    await Promise.race([
-      loadScript(CAPTCHA_SDK_URL),
-      loadScript(window.location.origin+'/captcha/proxy/aliyun_captcha.js?v=1')
-    ]);
-    await new Promise(function(resolve,reject){
-      var check=function(){
-        if(window.AliyunCaptcha)resolve();
-        else setTimeout(check,200);
-      };
-      var timeout=setTimeout(function(){reject(new Error('Timeout'));},20000);
-      check();
-    });
+    var     var SDK = window.AliyunCaptcha;
+    if(!SDK){
+      var s=document.createElement('script');
+      s.src=window.location.origin+'/captcha/proxy/aliyun_captcha.js?v=1';
+      document.body.appendChild(s);
+      await new Promise(function(resolve,reject){
+        s.onload=function(){SDK=window.AliyunCaptcha;if(SDK)resolve();else reject(new Error('SDK loaded but AliyunCaptcha not found'));};
+        s.onerror=function(){reject(new Error('Proxy load failed'));};
+      });
+    }
     st.textContent='';
     window.AliyunCaptcha({
       SceneId:'5jvar3wp',
@@ -1499,16 +1487,19 @@ async function showCaptcha(){
         return web.json_response({"ok": True})
 
     async def captcha_sdk_proxy(request):
-        try:
-            import urllib.request
-            sdk_url = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"
-            req = urllib.request.Request(sdk_url, headers={"User-Agent": "Mozilla/5.0"})
-            resp = urllib.request.urlopen(req, timeout=15)
-            raw = resp.read()
-            return web.Response(body=raw, content_type="application/javascript")
-        except Exception as e:
-            logger.warning("Captcha SDK proxy failed: %s", e)
-            return web.Response(body="console.error('SDK proxy failed')", content_type="application/javascript")
+        global _vmos_captcha_sdk_cache
+        if _vmos_captcha_sdk_cache is None:
+            try:
+                import urllib.request
+                sdk_url = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"
+                req = urllib.request.Request(sdk_url, headers={"User-Agent": "Mozilla/5.0"})
+                resp = urllib.request.urlopen(req, timeout=20)
+                _vmos_captcha_sdk_cache = resp.read()
+                logger.info("Captcha SDK cached (%d bytes)", len(_vmos_captcha_sdk_cache))
+            except Exception as e:
+                logger.warning("Captcha SDK download failed: %s", e)
+                return web.Response(body="console.error('SDK download failed')", content_type="application/javascript")
+        return web.Response(body=_vmos_captcha_sdk_cache, content_type="application/javascript")
 
     web_app = web.Application()
     web_app.router.add_get("/", handle)
