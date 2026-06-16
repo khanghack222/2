@@ -473,7 +473,7 @@ def save_van_blacklist(data):
 
 
 async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request, re, random
+    import urllib.request, re, random, html as html_mod
     BASE = "https://vietjack.com"
     try:
         req = urllib.request.Request(BASE + "/van-mau-lop-8/", headers={"User-Agent": "Mozilla/5.0"})
@@ -501,14 +501,24 @@ async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         req2 = urllib.request.Request(essay_url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req2, timeout=15) as resp2:
             html2 = resp2.read().decode("utf-8")
-        m = re.search(r'<div[^>]*class="entry-content"[^>]*>(.*?)</div>', html2, re.DOTALL)
-        if not m:
-            m = re.search(r'<article[^>]*>(.*?)</article>', html2, re.DOTALL)
-        content = re.sub(r'<[^>]+>', "", (m.group(1) if m else html2))
-        content = re.sub(r'\s+', " ", content).strip()
-        if len(content) > 4000:
-            content = content[:4000] + "..."
-        await update.message.reply_text(content)
+        m = re.search(r'<div class="col-md-7 middle-col">(.*?)</div>\s*</div>\s*</div>', html2, re.DOTALL)
+        content = m.group(1) if m else html2
+        content = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<style[^>]*>.*?</style>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<div class="(pre|nxt)-btn">.*?</div>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<div class="social-btn.*?</div>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<ul class="box-new-title">.*?</ul>', '', content, flags=re.DOTALL)
+        p_tags = re.findall(r'<p[^>]*>(.*?)</p>', content, re.DOTALL)
+        paragraphs = []
+        for p in p_tags:
+            text = re.sub(r'<[^>]+>', '', p)
+            text = html_mod.unescape(text).strip()
+            if len(text) > 30:
+                paragraphs.append(text)
+        result = '\n\n'.join(paragraphs)
+        if len(result) > 4000:
+            result = result[:4000] + "..."
+        await update.message.reply_text(result)
     except Exception:
         await update.message.reply_text("Lỗi lấy bài văn.")
 
