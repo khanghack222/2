@@ -913,6 +913,7 @@ async def lich_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # In-memory store: user_id -> registration state
 _vmos_registrations: dict[int, dict] = {}
 _vmos_poll_tasks: dict[int, asyncio.Task] = {}
+_vmos_captcha_tokens: dict[int, str] = {}
 
 _BX = "https://api.vmoscloud.com/vcpcloud/api"
 _VMOS_HD = {
@@ -1044,18 +1045,23 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "mail_token": mail_token, "status": "waiting",
     }
 
+    # Clear old captcha token
+    _vmos_captcha_tokens.pop(user_id, None)
+
+    host = os.environ.get("RENDER_EXTERNAL_URL", f"https://localhost:{os.environ.get('PORT', 10000)}")
+    captcha_url = f"{host}/captcha/vmos/{user_id}"
+
     hint = (
-        "📌 **Hướng dẫn:**\n"
-        f"1. Mở https://cloud.vmoscloud.com/login\n"
-        f"2. Nhập `{email}` → bấm **Gửi mã**\n"
-        f"3. **Kéo captcha** → VMOS gửi OTP về email\n"
-        f"4. Bot tự động check và reg, **không cần gõ gì thêm**\n\n"
-        f"⏳ Nếu lâu quá, dùng `/otp <mã>` để nhập thủ công."
+        f"📧 **Email:** `{email}`\n\n"
+        f"🔗 **Bước 1:** Mở link này và **kéo captcha**\n"
+        f"{captcha_url}\n\n"
+        f"📧 **Bước 2:** Sau đó nhập email trên vào https://cloud.vmoscloud.com/login\n"
+        f"   → bấm **Gửi mã**\n\n"
+        f"⏳ Bot tự động check OTP từ mail và đăng nhập.\n"
+        f"📌 Nếu lâu quá, dùng `/otp <mã>` để nhập thủ công."
     )
 
-    await msg.edit_text(
-        f"📧 `{email}`\n\n{hint}"
-    )
+    await msg.edit_text(hint)
 
     # 5. Start background polling
     task = asyncio.create_task(
@@ -1065,12 +1071,27 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, info_msg):
-    """Poll mail.tm inbox for OTP, then try API directly (no password)."""
+    """Poll mail.tm inbox for OTP, wait for captcha token, then call API."""
     try:
         known_ids = set()
+        captcha_sent_sms = False
         for attempt in range(35):
             await asyncio.sleep(3)
 
+            # Check for captcha token
+            captcha_token = _vmos_captcha_tokens.get(user_id)
+            if captcha_token and not captcha_sent_sms:
+                captcha_sent_sms = True
+                # Use captcha token to trigger OTP via smsSend API
+                sms_payload = {"smsType": 2, "mobilePhone": email, "captchaVerifyParam": captcha_token}
+                rc, rd = _vmos_req(f"{_BX}/sms/smsSend", sms_payload, "POST", _VMOS_HD, 10)
+                logger.debug(f"smsSend: HTTP={rc}, resp={str(rd)[:200]}")
+                await bot.edit_message_text(
+                    f"📧 `{email}`\n✅ Captcha solved\n⏳ Đang gửi yêu cầu OTP...",
+                    chat_id=chat_id, message_id=info_msg.message_id,
+                )
+
+            # Poll mail.tm for OTP
             status, data = _vmos_req(
                 "https://api.mail.tm/messages?page=1",
                 method="GET",
@@ -1099,34 +1120,45 @@ async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, info_msg):
                 if not otp:
                     continue
 
-                # Found OTP! Try API immediately
+                # Found OTP! Wait briefly for captcha token if not yet received
+                cap = _vmos_captcha_tokens.get(user_id)
+                if not cap:
+                    for _ in range(5):  # wait up to ~15s for captcha token
+                        await asyncio.sleep(3)
+                        cap = _vmos_captcha_tokens.get(user_id)
+                        if cap:
+                            break
+
                 await bot.edit_message_text(
                     f"📧 `{email}`\n✅ OTP: `{otp}`\n⏳ Đang reg...",
                     chat_id=chat_id, message_id=info_msg.message_id,
                 )
 
-                # Try login API with OTP (no password)
-                token = None
-                for payload in [
-                    {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
-                    {"email": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
-                    {"mobilePhone": email, "loginType": 0, "verifyCode": otp},
-                    {"email": email, "loginType": 0, "verifyCode": otp},
-                ]:
+                # Build login payloads: try with and without captchaVerifyParam
+                login_payloads = []
+                base_payload = {"loginType": 0, "verifyCode": otp, "channel": "web"}
+                for identifier_field in ("mobilePhone", "email"):
+                    base = {**base_payload, identifier_field: email}
+                    login_payloads.append(base)
+                    if cap:
+                        login_payloads.append({**base, "captchaVerifyParam": cap})
+
+                login_token = None
+                for payload in login_payloads:
                     rc, rd = _vmos_req(f"{_BX}/user/login", payload, "POST", _VMOS_HD, 10)
-                    logger.debug(f"VMOS OTP payload {list(payload.keys())}: HTTP={rc}, resp={str(rd)[:500]}")
+                    logger.debug(f"VMOS login {list(payload.keys())}: HTTP={rc}, resp={str(rd)[:500]}")
                     if isinstance(rd, dict):
                         for k in ("code", "status", "resultCode", "success"):
                             v = rd.get(k)
                             if v in (200, 0, "200", "0", True):
-                                token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
+                                login_token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
                                 break
-                    if token:
+                    if login_token:
                         break
 
-                if token:
+                if login_token:
                     trial = ""
-                    hd2 = {**_VMOS_HD, "Token": token}
+                    hd2 = {**_VMOS_HD, "Token": login_token}
                     trial_payloads = [
                         (f"{_BX}/order/create", {"email": email, "type": 1}),
                         (f"{_BX}/order/create", {"email": email, "type": 1, "goodsId": ""}),
@@ -1162,7 +1194,7 @@ async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, info_msg):
         # Timeout — no OTP received
         await bot.edit_message_text(
             f"⏰ Quá thời gian chờ OTP.\n"
-            f"📧 `{email}`\n🔑 `{pw}`\n\n"
+            f"📧 `{email}`\n\n"
             f"👉 Dùng `/otp <số>` nếu đã nhận được mail.",
             chat_id=chat_id, message_id=info_msg.message_id,
         )
@@ -1178,6 +1210,7 @@ async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, info_msg):
             pass
     finally:
         _vmos_poll_tasks.pop(user_id, None)
+        _vmos_captcha_tokens.pop(user_id, None)
 
 
 async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1203,14 +1236,21 @@ async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     email = reg["email"]
     msg = await update.message.reply_text("⏳ Đang reg...")
 
-    # Try API with OTP immediately
+    # Try API with OTP, include captchaVerifyParam if available
+    cap = _vmos_captcha_tokens.get(user_id)
     token = None
-    for payload in [
+    base_payloads = [
         {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
         {"email": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
         {"mobilePhone": email, "loginType": 0, "verifyCode": otp},
         {"email": email, "loginType": 0, "verifyCode": otp},
-    ]:
+    ]
+    all_payloads = []
+    for bp in base_payloads:
+        all_payloads.append(bp)
+        if cap:
+            all_payloads.append({**bp, "captchaVerifyParam": cap})
+    for payload in all_payloads:
         rc, rd = _vmos_req(f"{_BX}/user/login", payload, "POST", _VMOS_HD, 10)
         logger.debug(f"OTP reg payload {list(payload.keys())}: HTTP={rc}, resp={str(rd)[:500]}")
         if isinstance(rd, dict):
@@ -1324,13 +1364,136 @@ async def main():
     async def handle(request):
         return web.Response(text="OK")
 
+    CAPTCHA_PAGE = r"""<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VMOS Captcha</title>
+<style>
+body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#f5f5f5;font-family:sans-serif;flex-direction:column;gap:20px}
+.card{background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.1);padding:30px;text-align:center;max-width:400px}
+h2{color:#333;margin:0 0 8px}
+p{color:#666;margin:0 0 20px;font-size:14px}
+#captcha-element{display:flex;justify-content:center}
+.btn{background:#1677ff;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:16px;cursor:pointer;transition:background .2s}
+.btn:hover{background:#4096ff}
+.btn.loading{opacity:.6;pointer-events:none}
+.status{font-size:14px;padding:8px 16px;border-radius:6px;margin-top:12px}
+.status.ok{background:#f6ffed;color:#52c41a;border:1px solid #b7eb8f}
+.status.err{background:#fff2f0;color:#ff4d4f;border:1px solid #ffccc7}
+</style>
+</head>
+<body>
+<div class="card">
+<h2>Xác thực VMOS</h2>
+<p>Kéo thả mảnh ghép để xác thực</p>
+<div id="captcha-element"></div>
+<button class="btn" id="startBtn" onclick="showCaptcha()">Bắt đầu xác thực</button>
+<div id="status"></div>
+</div>
+<script src="https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"></script>
+<script>
+async function showCaptcha(){
+  const btn=document.getElementById('startBtn');
+  const st=document.getElementById('status');
+  btn.classList.add('loading');
+  btn.textContent='Đang tải...';
+  try{
+    await new Promise((resolve,reject)=>{
+      if(window.AliyunCaptcha){
+        resolve();
+        return;
+      }
+      const check=()=>{
+        if(window.AliyunCaptcha)resolve();
+        else setTimeout(check,100);
+      };
+      setTimeout(()=>reject(new Error('Timeout loading captcha SDK')),15000);
+      check();
+    });
+    window.AliyunCaptcha({
+      SceneId:'5jvar3wp',
+      prefix:'69r0rc',
+      mode:'popup',
+      element:'#captcha-element',
+      language:'vi',
+      region:'sgp',
+      slideStyle:{width:360,height:40},
+      captchaVerifyCallback:function(data){
+        const p=data.captchaVerifyParam||data.CaptchaVerifyParam;
+        st.className='status';
+        st.textContent='Dang xac thuc...';
+        fetch('/captcha/callback/'+__UID__,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({captchaVerifyParam:p})
+        }).then(r=>r.json()).then(d=>{
+          if(d.ok){
+            st.className='status ok';
+            st.textContent='Xac thuc thanh cong!';
+            btn.textContent='Thanh cong';
+          }else{
+            st.className='status err';
+            st.textContent='Loi: '+d.error;
+            btn.classList.remove('loading');
+            btn.textContent='Thu lai';
+          }
+        }).catch(e=>{
+          st.className='status err';
+          st.textContent='Loi gui: '+e.message;
+          btn.classList.remove('loading');
+          btn.textContent='Thu lai';
+        });
+      },
+      onBizResultCallback:function(){
+        btn.classList.remove('loading');
+        btn.textContent='Xac thuc thanh cong';
+      }
+    });
+  }catch(e){
+    st.className='status err';
+    st.textContent='Loi: '+e.message;
+    btn.classList.remove('loading');
+    btn.textContent='Thu lai';
+  }
+}
+</script>
+</body>
+</html>"""
+
+    async def captcha_page(request):
+        user_id = request.match_info.get("user_id", "")
+        if not user_id.isdigit():
+            return web.Response(text="Invalid user_id", status=400)
+        html = CAPTCHA_PAGE.replace("__UID__", user_id)
+        return web.Response(text=html, content_type="text/html")
+
+    async def captcha_callback(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"})
+        user_id_str = request.match_info.get("user_id", "")
+        if not user_id_str.isdigit():
+            return web.json_response({"ok": False, "error": "invalid user_id"})
+        user_id = int(user_id_str)
+        token = body.get("captchaVerifyParam") or ""
+        if not token:
+            return web.json_response({"ok": False, "error": "missing token"})
+        _vmos_captcha_tokens[user_id] = token
+        logger.info("Captcha token received for user %s", user_id)
+        return web.json_response({"ok": True})
+
     web_app = web.Application()
     web_app.router.add_get("/", handle)
+    web_app.router.add_get("/captcha/vmos/{user_id}", captcha_page)
+    web_app.router.add_post("/captcha/callback/{user_id}", captcha_callback)
     runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info("Health server started on port %d", PORT)
+    logger.info("Web server started on port %d", PORT)
 
     logger.info("Bot started")
     await app.initialize()
