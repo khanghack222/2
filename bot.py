@@ -809,156 +809,128 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi lấy meme.")
 
 
+# In-memory store: user_id -> {"email": str, "password": str}
+_vmos_registrations: dict[int, dict] = {}
+
 async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    gm = "https://api.guerrillamail.com/ajax.php"
+    user_id = update.effective_user.id
 
-    msg = await update.message.reply_text("⏳ Tạo email tạm...")
-    try:
-        r_raw = urllib.request.urlopen(
-            urllib.request.Request(f"{gm}?f=get_email_address", headers={"User-Agent": ua}),
-            timeout=15,
-        ).read().decode()
-        r = json.loads(r_raw)
-        email = (r if isinstance(r, dict) else {}).get("email_addr", "")
-        sid = (r if isinstance(r, dict) else {}).get("sid_token", "")
-        if not email:
-            await msg.edit_text("❌ Không tạo được email")
-            return
+    # Generate random email + password
+    name = "vm" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    email = f"{name}@synsky.com"
+    pw = str(random.randint(10000, 99999))
 
-        pw = str(random.randint(10000, 99999))
-        # FIX: show instructions immediately without waiting
-        await msg.edit_text(
-            f"📧 `{email}`\n🔑 `{pw}`\n\n"
-            f"1️⃣ Mở https://cloud.vmoscloud.com/login\n"
-            f"2️⃣ Nhập email trên → bấm **Gửi mã**\n"
-            f"3️⃣ **Kéo mảnh ghép captcha**\n"
-            f"4️⃣ **Đừng** nhập pass hay OTP — để đó bot lo\n\n"
-            f"🔄 Bot đang chờ mail... (tối đa 2p)"
-        )
+    _vmos_registrations[user_id] = {"email": email, "password": pw}
 
-        for i in range(40):
-            await asyncio.sleep(3)
-            try:
-                r_raw = urllib.request.urlopen(
-                    urllib.request.Request(
-                        f"{gm}?f=get_email_list&sid_token={urllib.parse.quote(sid)}",
-                        headers={"User-Agent": ua},
-                    ),
-                    timeout=10,
-                ).read().decode()
-                r = json.loads(r_raw)
-                msgs = (r if isinstance(r, dict) else {}).get("list", [])
-                if not msgs:
-                    if i > 0 and i % 4 == 0:
-                        await msg.edit_text(
-                            f"📧 `{email}` | ⏳ {(i + 1) * 3}s...\n"
-                            f"👉 Vào cloud.vmoscloud.com/login → nhập email → gửi mã → giải captcha"
-                        )
-                    continue
+    await update.message.reply_text(
+        f"📧 `{email}`\n🔑 `{pw}`\n\n"
+        f"1️⃣ Mở https://cloud.vmoscloud.com/login\n"
+        f"2️⃣ Nhập **email trên** → bấm **Gửi mã**\n"
+        f"3️⃣ **Kéo mảnh ghép captcha**\n"
+        f"4️⃣ Sau đó nhập mã OTP: **/otp 123456**\n\n"
+        f"📌 Ví dụ: `/otp 531926`"
+    )
 
-                d_raw = urllib.request.urlopen(
-                    urllib.request.Request(
-                        f"{gm}?f=fetch_email&email_id={msgs[0].get('mail_id', '')}&sid_token={urllib.parse.quote(sid)}",
-                        headers={"User-Agent": ua},
-                    ),
-                    timeout=10,
-                ).read().decode()
-                d = json.loads(d_raw)
-                body = html_mod.unescape((d if isinstance(d, dict) else {}).get("mail_body", "") or "")
-                codes = re.findall(r'\b\d{6}\b', body)
-                if codes:
-                    otp = codes[0]
-                    await msg.edit_text(f"✅ Có mã `{otp}`\n⏳ Đang reg + trial...")
-                    bx = "https://api.vmoscloud.com/vcpcloud/api"
-                    hd = {
-                        "Content-Type": "application/json",
-                        "User-Agent": ua,
-                        "requestsource": "wechat-miniapp",
-                        "clientType": "web",
-                        "appVersion": "3.6.1401",
-                    }
-                    reg_success = False
-                    token = None
-                    # Try login endpoint first (covers both login + code_register)
-                    for payload in [
-                        {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
-                        {"mobilePhone": email, "password": pw, "verifyCode": otp},
-                        {"email": email, "password": pw, "verifyCode": otp},
-                    ]:
-                        try:
-                            endpoint = f"{bx}/user/login" if "loginType" in payload else f"{bx}/user/register"
-                            r_raw = urllib.request.urlopen(
-                                urllib.request.Request(
-                                    endpoint,
-                                    data=json.dumps(payload).encode(),
-                                    headers=hd,
-                                    method="POST",
-                                ),
-                                timeout=10,
-                            ).read().decode()
-                            reg = json.loads(r_raw)
-                            rd = reg if isinstance(reg, dict) else (reg[0] if isinstance(reg, list) and reg else {})
-                            rc = rd.get("code")
-                            if rc == 200:
-                                reg_success = True
-                                token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
-                                break
-                            elif rc in (1056, 1059):
-                                if i < 39:
-                                    await msg.edit_text(f"⏳ Mã {otp} sai hoặc chưa kích hoạt, chờ 3s...")
-                                    await asyncio.sleep(3)
-                                continue
-                        except Exception as reg_e:
-                            logger.debug(f"Payload {list(payload.keys())} failed: {reg_e}")
-                            continue
-                    if reg_success:
-                        trial_msg = ""
-                        hd2 = {**hd}
-                        if token:
-                            hd2["Token"] = token
-                        # Try to activate trial (try several possible endpoints)
-                        for trial_ep in ["/order/create", "/order/createMoneyOrder", "/cloudTemplate/buyGoodTimeOrder"]:
-                            try:
-                                trial_payload = {}
-                                if "order" in trial_ep:
-                                    trial_payload = {"email": email, "type": 1}
-                                else:
-                                    trial_payload = {"email": email, "type": 1, "goodId": ""}
-                                t_raw = urllib.request.urlopen(
-                                    urllib.request.Request(
-                                        f"{bx}{trial_ep}",
-                                        data=json.dumps(trial_payload).encode(),
-                                        headers=hd2,
-                                        method="POST",
-                                    ),
-                                    timeout=10,
-                                ).read().decode()
-                                tj = json.loads(t_raw)
-                                td = tj if isinstance(tj, dict) else {}
-                                if td.get("code") == 200:
-                                    trial_msg = " | ✅ Trial"
-                                    break
-                            except Exception:
-                                continue
-                        await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`{trial_msg}")
-                    else:
-                        await msg.edit_text(
-                            f"✅ Có mã `{otp}` nhưng reg API lỗi\n"
-                            f"👉 Vào cloud.vmoscloud.com/login nhập OTP `{otp}` set pass `{pw}`"
-                        )
-                    return
-            except Exception as poll_e:
-                logger.debug(f"Email poll iteration {i} failed: {poll_e}")
-                continue
 
-        await msg.edit_text(f"❌ Hết giờ\n📧 `{email}`\n🔑 `{pw}`\n📬 https://www.guerrillamail.com/")
-    except Exception as e:
-        logger.warning(f"VMOS command failed: {e}")
+async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    user_id = update.effective_user.id
+
+    reg = _vmos_registrations.get(user_id)
+    if not reg:
+        await update.message.reply_text("❌ Chưa chạy `/vmos` trước đó.")
+        return
+
+    args = context.args
+    if not args:
+        await update.message.reply_text("❌ Ghi: `/otp 123456`")
+        return
+
+    otp = args[0].strip()
+    if not re.match(r'^\d{4,8}$', otp):
+        await update.message.reply_text("❌ Mã OTP không hợp lệ (4-8 số)")
+        return
+
+    email = reg["email"]
+    pw = reg["password"]
+    msg = await update.message.reply_text(f"⏳ Đang reg + trial...")
+
+    bx = "https://api.vmoscloud.com/vcpcloud/api"
+    hd = {
+        "Content-Type": "application/json",
+        "User-Agent": ua,
+        "requestsource": "wechat-miniapp",
+        "clientType": "web",
+        "appVersion": "3.6.1401",
+    }
+
+    reg_success = False
+    token = None
+    for payload in [
+        {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
+        {"mobilePhone": email, "password": pw, "verifyCode": otp},
+        {"email": email, "password": pw, "verifyCode": otp},
+    ]:
         try:
-            await msg.edit_text(f"❌ {str(e)[:200]}")
-        except Exception:
-            pass
+            endpoint = f"{bx}/user/login" if "loginType" in payload else f"{bx}/user/register"
+            r_raw = urllib.request.urlopen(
+                urllib.request.Request(
+                    endpoint,
+                    data=json.dumps(payload).encode(),
+                    headers=hd,
+                    method="POST",
+                ),
+                timeout=10,
+            ).read().decode()
+            reg_resp = json.loads(r_raw)
+            rd = reg_resp if isinstance(reg_resp, dict) else (reg_resp[0] if isinstance(reg_resp, list) and reg_resp else {})
+            rc = rd.get("code")
+            if rc == 200:
+                reg_success = True
+                token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
+                break
+            elif rc == 1056:
+                await msg.edit_text(f"⏳ Mã OTP sai, thử payload khác...")
+                continue
+        except Exception as reg_e:
+            logger.debug(f"Payload {list(payload.keys())} failed: {reg_e}")
+            continue
+
+    if reg_success:
+        trial_msg = ""
+        hd2 = {**hd}
+        if token:
+            hd2["Token"] = token
+        for trial_ep in ["/order/create", "/order/createMoneyOrder", "/cloudTemplate/buyGoodTimeOrder"]:
+            try:
+                trial_payload = {}
+                if "order" in trial_ep:
+                    trial_payload = {"email": email, "type": 1}
+                else:
+                    trial_payload = {"email": email, "type": 1, "goodId": ""}
+                t_raw = urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{bx}{trial_ep}",
+                        data=json.dumps(trial_payload).encode(),
+                        headers=hd2,
+                        method="POST",
+                    ),
+                    timeout=10,
+                ).read().decode()
+                tj = json.loads(t_raw)
+                td = tj if isinstance(tj, dict) else {}
+                if td.get("code") == 200:
+                    trial_msg = " | ✅ Trial"
+                    break
+            except Exception:
+                continue
+        await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`{trial_msg}")
+    else:
+        await msg.edit_text(
+            f"❌ Reg API lỗi dù đã có OTP\n"
+            f"👉 Vào cloud.vmoscloud.com/login nhập OTP `{otp}` set pass `{pw}` thủ công"
+        )
 
 
 # FIX: consolidated main function with proper startup sequence
@@ -988,6 +960,7 @@ async def main():
         BotCommand("anime", "Tra anime"),
         BotCommand("meme", "Meme ngẫu nhiên"),
         BotCommand("vmos", "Tạo VMOS Cloud trial"),
+        BotCommand("otp", "Nhập mã OTP cho /vmos"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -1019,6 +992,7 @@ async def main():
     app.add_handler(CommandHandler("anime", anime_cmd))
     app.add_handler(CommandHandler("meme", meme_cmd))
     app.add_handler(CommandHandler("vmos", vmos_cmd))
+    app.add_handler(CommandHandler("otp", otp_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
 
