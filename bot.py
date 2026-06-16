@@ -668,10 +668,11 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expr = " ".join(context.args)
     if not expr:
-        await update.message.reply_text("Nhập biểu thức. VD: /calc 2+2*3")
+        await update.message.reply_text("Nhập biểu thức. VD:\n/calc 1+1\n/calc 2x3 (x = nhân)\n/calc 6:2 (: = chia)")
         return
     import math
     try:
+        expr = expr.replace("x", "*").replace("X", "*").replace(":", "/")
         allowed = {"abs": abs, "round": round, "int": int, "float": float, "str": str, "len": len, "min": min, "max": max, "sum": sum, "pow": pow, "math": math}
         result = eval(expr, {"__builtins__": {}}, allowed)
         await update.message.reply_text(f"= {result}")
