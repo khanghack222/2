@@ -763,7 +763,7 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pw = str(random.randint(10000, 99999))
         await msg.edit_text(
             f"📧 `{email}`\n🔑 `{pw}`\n\n"
-            f"1️⃣ Mở https://cloud.vmos.com/register\n"
+            f"1️⃣ Mở https://cloud.vmoscloud.com/buy\n"
             f"2️⃣ Nhập email + pass trên → gửi mã\n"
             f"3️⃣ **Kéo mảnh ghép captcha**\n\n"
             f"🔄 Bot đang chờ mail... (tối đa 2p)")
