@@ -763,16 +763,20 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pw = str(random.randint(10000, 99999))
         await msg.edit_text(
             f"📧 `{email}`\n🔑 `{pw}`\n\n"
-            f"👉 **Mở link này** → nhập email + pass → bấm gửi mã → **giải captcha**:\n"
-            f"https://cloud.vmos.com/register\n\n"
-            f"🔄 Bot đang chờ mã ở hộp thư...")
+            f"1️⃣ Mở https://cloud.vmos.com/register\n"
+            f"2️⃣ Nhập email + pass trên → gửi mã\n"
+            f"3️⃣ **Kéo mảnh ghép captcha**\n\n"
+            f"🔄 Bot đang chờ mail... (tối đa 2p)")
 
         for i in range(40):
             await asyncio.sleep(3)
             try:
                 r = json.loads(urllib.request.urlopen(urllib.request.Request(f"{gm}?f=get_email_list&sid_token={sid}", headers={"User-Agent": ua}), timeout=10).read().decode())
                 msgs = (r if isinstance(r, dict) else {}).get("list", [])
-                if not msgs: continue
+                if not msgs:
+                    if i > 0 and i % 4 == 0:
+                        await msg.edit_text(f"📧 `{email}` | ⏳ {(i+1)*3}s...\n👉 Giải captcha ở cloud.vmos.com xong chưa?")
+                    continue
                 d = json.loads(urllib.request.urlopen(urllib.request.Request(f"{gm}?f=fetch_email&email_id={msgs[0].get('mail_id','')}&sid_token={sid}", headers={"User-Agent": ua}), timeout=10).read().decode())
                 body = html_mod.unescape((d if isinstance(d, dict) else {}).get("mail_body", "") or "")
                 codes = re.findall(r'\b\d{6}\b', body)
@@ -803,12 +807,6 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.edit_text(f"✅ Có mã `{otp}` nhưng reg lỗi\n📧 `{email}`\n🔑 `{pw}`\n👉 Reg tay: cloud.vmos.com")
                     return
             except: pass
-            if i == 5:
-                await msg.edit_text(
-                    f"📧 `{email}`\n🔑 `{pw}`\n\n"
-                    f"👉 Vào link → nhập email + pass → gửi mã → **giải captcha kéo mảnh ghép**:\n"
-                    f"https://cloud.vmos.com/register\n\n"
-                    f"🔄 Bot đang chờ...")
         await msg.edit_text(f"❌ Hết giờ\n📧 `{email}`\n🔑 `{pw}`\n📬 https://www.guerrillamail.com/")
     except Exception as e:
         try: await msg.edit_text(f"❌ {str(e)[:200]}")
