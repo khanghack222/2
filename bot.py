@@ -207,49 +207,87 @@ def save_van_blacklist(data):
 
 # --- Core command handlers ---
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        "Chào bạn! Tôi là bot cá nhân của bạn.\n\n"
-        "📌 **Lệnh cơ bản:**\n"
-        "/help - Hướng dẫn chi tiết\n"
-        "/id - Thông tin của bạn\n"
-        "/status - Trạng thái bot\n\n"
-        "📌 **Tiện ích:**\n"
-        "/weather <tp> - Thời tiết\n"
-        "/translate <văn bản> - Dịch sang Anh\n"
-        "/shorten <url> - Rút gọn link\n"
-        "/qr <nội dung> - Tạo QR\n"
-        "/crypto - Giá crypto\n"
-        "/ip - IP + vị trí\n"
-        "/screenshot <url> - Chụp web\n\n"
-        "📌 **Công cụ:**\n"
-        "/code <ext> - Ảnh code đẹp (vd: /code py)\n"
-        "/calc <biểu thức> - Máy tính (/calc 2+2*pi)\n"
-        "/password <số> - Tạo mật khẩu\n"
-        "/passwords - DS mật khẩu\n"
-        "/editpass <id> <mk> - Sửa pass\n"
-        "/delpass <id> - Xóa pass\n"
-        "/proxy - Random proxy\n\n"
-        "📌 **Giải trí:**\n"
-        "/joke - Câu chuyện vui\n"
-        "/anime <tên> - Tra anime\n"
-        "/meme - Meme ngẫu nhiên\n\n"
-        "📌 **Học tập:**\n"
-        "/van - Văn mẫu lớp 8\n"
-        "/dictionary <từ> - Tra từ điển\n"
-        "/wiki <từ khóa> - Tra Wikipedia\n\n"
-        "📌 **Tài chính:**\n"
-        "/crypto - Giá crypto\n"
-        "/tygia - Tỷ giá ngoại tệ → VND\n\n"
-        "📌 **Lịch:**\n"
-        "/lich - Lịch âm hôm nay\n"
-        "/lich 30/4/2026 - Xem lịch ngày cụ thể\n\n"
-        "📌 **Khác:**\n"
-        "/remind <giây> <nd> - Đặt nhắc nhở\n"
-        "/list - DS nhắc nhở\n"
-        "/cancel <id> - Hủy nhắc nhở"
+# --- Interactive command menu (inline keyboard) ---
+MENU_SECTIONS = {
+    "tienich": ("🌤 Tiện ích",
+        "🌤 /weather <tp> — Thời tiết\n"
+        "🌐 /translate <vb> — Dịch sang Việt\n"
+        "🔗 /shorten <url> — Rút gọn link\n"
+        "📱 /qr <nd> — Tạo QR code\n"
+        "🌍 /ip — IP + vị trí\n"
+        "📸 /screenshot <url> — Chụp web"),
+    "congcu": ("🛠 Công cụ",
+        "🖼 /code <ext> — Ảnh code đẹp (vd: /code py)\n"
+        "🧮 /calc <bt> — Máy tính (/calc 2+2*pi)\n"
+        "🔐 /password <số> — Tạo mật khẩu\n"
+        "📋 /passwords — DS mật khẩu\n"
+        "✏️ /editpass <id> <mk> — Sửa pass\n"
+        "🗑 /delpass <id> — Xóa pass\n"
+        "🛰 /proxy — Random proxy"),
+    "giaitri": ("🎭 Giải trí",
+        "🎭 /joke — Câu chuyện vui\n"
+        "📺 /anime <tên> — Tra anime\n"
+        "😂 /meme — Meme ngẫu nhiên"),
+    "hoctap": ("📚 Học tập",
+        "📝 /van — Văn mẫu lớp 8\n"
+        "📖 /dictionary <từ> — Từ điển Anh\n"
+        "🔎 /wiki <từ khóa> — Wikipedia"),
+    "taichinh": ("💰 Tài chính",
+        "💰 /crypto — Giá crypto\n"
+        "💱 /tygia — Tỷ giá ngoại tệ → VND"),
+    "lich": ("📅 Lịch & Nhắc nhở",
+        "📅 /lich — Lịch âm hôm nay\n"
+        "📅 /lich 30/4/2026 — Xem ngày cụ thể\n"
+        "⏰ /remind <giây> <nd> — Đặt nhắc nhở\n"
+        "📋 /list — DS nhắc nhở\n"
+        "❌ /cancel <id> — Hủy nhắc nhở"),
+    "khac": ("ℹ️ Khác",
+        "ℹ️ /id — Thông tin của bạn\n"
+        "📊 /status — Trạng thái bot\n"
+        "❓ /help — Hướng dẫn chi tiết kèm ví dụ"),
+}
+
+MENU_GREETING = "👋 **Chào bạn!** Mình là bot cá nhân. Chọn một nhóm lệnh bên dưới:"
+
+
+def main_menu_keyboard():
+    rows, row = [], []
+    for key, (title, _) in MENU_SECTIONS.items():
+        row.append(InlineKeyboardButton(title, callback_data=f"menu_{key}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(rows)
+
+
+def section_keyboard():
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Quay lại menu", callback_data="menu_home")]]
     )
-    await update.message.reply_text(msg)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        MENU_GREETING, reply_markup=main_menu_keyboard(), parse_mode="Markdown"
+    )
+
+
+async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if q.data == "menu_home":
+        await q.edit_message_text(
+            MENU_GREETING, reply_markup=main_menu_keyboard(), parse_mode="Markdown"
+        )
+        return
+    section = MENU_SECTIONS.get(q.data.replace("menu_", ""))
+    if section:
+        title, body = section
+        await q.edit_message_text(
+            f"**{title}**\n\n{body}", reply_markup=section_keyboard(), parse_mode="Markdown"
+        )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1221,6 +1259,7 @@ async def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu_"))
     app.add_handler(CommandHandler("remind", remind))
     app.add_handler(CommandHandler("list", list_reminders))
     app.add_handler(CommandHandler("cancel", cancel))
