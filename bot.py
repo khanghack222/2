@@ -748,7 +748,7 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request, urllib.parse, json, string, random, urllib.error
+    import urllib.request, urllib.parse, json, string, random, urllib.error, html as html_mod
 
     async def st(t):
         nonlocal msg
@@ -765,34 +765,15 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             raise Exception(f"[{e.code}] {url[:80]}: {body}")
 
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    mh_common = {"Accept": "application/json", "User-Agent": ua}
+    gm = "https://api.guerrillamail.com/ajax.php"
 
     msg = await update.message.reply_text("⏳ [1/5] Tạo email...")
     try:
-        mail_user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-        mail_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-
-        # Try known domain first (faster, skip domain fetch)
-        dom = "cliptik.net"
-        email = f"{mail_user}@{dom}"
-        try:
-            acc = jget("https://api.mail.tm/accounts",
-                data=json.dumps({"address": email, "password": mail_pass}).encode(),
-                headers={"Content-Type": "application/json", "User-Agent": ua}, method="POST")
-        except Exception:
-            d = jget("https://api.mail.tm/domains", headers=mh_common)
-            dom = d.get("hydra:member", [{}])[0].get("domain", "cliptik.net")
-            email = f"{mail_user}@{dom}"
-            acc = jget("https://api.mail.tm/accounts",
-                data=json.dumps({"address": email, "password": mail_pass}).encode(),
-                headers={"Content-Type": "application/json", "User-Agent": ua}, method="POST")
-        email = acc.get("address", email)
-
-        tok = jget("https://api.mail.tm/token",
-            data=json.dumps({"address": email, "password": mail_pass}).encode(),
-            headers={"Content-Type": "application/json", "User-Agent": ua}, method="POST")
-        token = tok.get("token", "")
-        mh = {"Authorization": f"Bearer {token}", "Accept": "application/json", "User-Agent": ua}
+        r = jget(f"{gm}?f=get_email_address", headers={"User-Agent": ua})
+        email = r.get("email_addr", "")
+        sid = r.get("sid_token", "")
+        if not email:
+            await st("❌ Không tạo được email tạm"); return
 
         bx = "https://api.vmoscloud.com/vcpcloud/api"
         hd = {"Content-Type": "application/json", "Accept-Language": "vi", "clientType": "web",
@@ -815,18 +796,15 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await st(f"❌ [3/5] Gửi mã thất bại\n📧 `{email}`\n👉 Reg tay: cloud.vmos.com"); return
 
         await st(f"✅ [3/5] Đã gửi\n⏳ [4/5] Đợi mail...")
-        for i in range(20):
+        for i in range(25):
             await asyncio.sleep(3)
             try:
-                ms = jget("https://api.mail.tm/messages", headers=mh)
-                ml = ms.get("hydra:member", [])
-                if ml:
-                    d = jget(f"https://api.mail.tm/messages/{ml[0]['id']}", headers=mh)
-                    body = ""
-                    for part in (d.get("html") or []):
-                        body += part.get("value", "")
-                    for part in (d.get("text") or []):
-                        body += part.get("value", "")
+                lst = jget(f"{gm}?f=get_email_list&sid_token={urllib.parse.quote(sid)}", headers={"User-Agent": ua})
+                msgs = lst.get("list", [])
+                if msgs:
+                    mid = msgs[0].get("mail_id", "")
+                    det = jget(f"{gm}?f=fetch_email&email_id={mid}&sid_token={urllib.parse.quote(sid)}", headers={"User-Agent": ua})
+                    body = html_mod.unescape(det.get("mail_body", "") or "")
                     codes = re.findall(r'\b\d{6}\b', body)
                     if codes:
                         await st(f"✅ [4/5] Mã: `{codes[0]}`\n⏳ [5/5] Đăng nhập...")
@@ -842,7 +820,7 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await st(f"✅ [3/5] Đã gửi\n⏳ [4/5] Đợi ({(i+1)*3}s)...")
             except:
                 await st(f"✅ [3/5] Đã gửi\n⏳ [4/5] Đợi ({(i+1)*3}s)...")
-        await st(f"❌ Hết giờ\n📧 `{email}`\n🔑 `{mail_pass}`")
+        await st(f"❌ Hết giờ\n📧 `{email}`\nMở: https://www.guerrillamail.com/")
     except Exception as e:
         await st(f"❌ {str(e)[:200]}")
 
