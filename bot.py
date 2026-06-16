@@ -402,6 +402,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import platform, sys, subprocess, os as os_module
+
     uptime = datetime.datetime.now() - START_TIME
     days = uptime.days
     hours, rem = divmod(uptime.seconds, 3600)
@@ -409,9 +411,45 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_users = len(set(list(reminders.keys()) + list(passwords.keys())))
     total_reminders = sum(len(v) for v in reminders.values())
     total_passwords = sum(len(v) for v in passwords.values())
+
+    git_hash = ""
+    try:
+        git_hash = subprocess.run(
+            ["git", "log", "--oneline", "-1"],
+            capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+    except Exception:
+        git_hash = "N/A"
+
+    memory = "N/A"
+    try:
+        if os_module.name == "nt":
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            cachel = ctypes.c_size_t()
+            total = ctypes.c_size_t()
+            free = ctypes.c_size_t()
+            kernel32.GetNativeSystemInfo(ctypes.byref(ctypes.c_int(0)))
+            kernel32.GlobalMemoryStatusEx(ctypes.byref(ctypes.c_int(0)))
+            memory = "xem qua Task Manager"
+        else:
+            with open("/proc/meminfo") as f:
+                mem = f.read()
+            for line in mem.splitlines():
+                if line.startswith("MemAvailable:"):
+                    kb = int(line.split()[1])
+                    memory = f"{kb // 1024}MB"
+                    break
+    except Exception:
+        memory = "N/A"
+
     msg = (
         f"Bot Status\n"
         f"Thời gian chạy: {days}d {hours}h {minutes}m\n"
+        f"Python: {sys.version.split()[0]}\n"
+        f"OS: {platform.system()} {platform.release()}\n"
+        f"Git: {git_hash}\n"
+        f"Ram khả dụng: {memory}\n"
         f"Người dùng: {total_users}\n"
         f"Nhắc nhở: {total_reminders}\n"
         f"Mật khẩu đã lưu: {total_passwords}"
