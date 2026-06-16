@@ -966,6 +966,21 @@ def _extract_otp_from_msg(msg_data):
 
     subject = msg_data.get("subject") or ""
     search_text = f"{subject}\n{body_text}"
+
+    # Priority 1: number after OTP/code/mã keywords
+    for pat in [r"(?:mã xác thực|code xác thực)[:\s]*(\d{4,8})",
+                r"(?:mã|ma|OTP|code|verify)[:\s]*(\d{4,8})",
+                r"(\d{4,8})[:\s]*(?:là|la|is)"]:
+        m = re.search(pat, search_text, re.IGNORECASE)
+        if m:
+            return m.group(1)
+
+    # Priority 2: prefer 5-8 digit codes (avoid years)
+    codes_5plus = re.findall(r"(?<!\d)(\d{5,8})(?!\d)", search_text)
+    if codes_5plus:
+        return codes_5plus[0]
+
+    # Priority 3: any 4-digit code
     codes = re.findall(r"(?<!\d)(\d{4,8})(?!\d)", search_text)
     return codes[0] if codes else None
 
