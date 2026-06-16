@@ -984,10 +984,11 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if status == 200 and isinstance(data, list):
         domains = [d["domain"] for d in data if d.get("isActive")]
     else:
+        logger.debug(f"mail.tm domains failed: status={status}, data={str(data)[:200]}")
         domains = []
     if not domains:
-        await msg.edit_text("❌ Không lấy được domain email tạm.")
-        return
+        logger.debug("Falling back to hardcoded domain")
+        domains = ["web-library.net"]
 
     # 2. Create mail.tm account
     domain = random.choice(domains)
