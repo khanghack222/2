@@ -665,6 +665,87 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sys.exit(0)
 
 
+async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    expr = " ".join(context.args)
+    if not expr:
+        await update.message.reply_text("Nhập biểu thức. VD: /calc 2+2*3")
+        return
+    import math
+    try:
+        allowed = {"abs": abs, "round": round, "int": int, "float": float, "str": str, "len": len, "min": min, "max": max, "sum": sum, "pow": pow, "math": math}
+        result = eval(expr, {"__builtins__": {}}, allowed)
+        await update.message.reply_text(f"= {result}")
+    except Exception:
+        await update.message.reply_text("Lỗi tính toán.")
+
+
+async def anime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = " ".join(context.args)
+    if not query:
+        await update.message.reply_text("Nhập tên anime. VD: /anime one piece")
+        return
+    import urllib.request, urllib.parse
+    try:
+        url = f"https://api.jikan.moe/v4/anime?q={urllib.parse.quote(query)}&limit=1"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if not data.get("data"):
+            await update.message.reply_text("Không tìm thấy anime.")
+            return
+        a = data["data"][0]
+        title = a.get("title", "N/A")
+        title_jp = a.get("title_japanese", "")
+        type_ = a.get("type", "N/A")
+        episodes = a.get("episodes", "N/A")
+        score = a.get("score", "N/A")
+        status = a.get("status", "N/A")
+        synopsis = a.get("synopsis", "")
+        if synopsis and len(synopsis) > 300:
+            synopsis = synopsis[:300] + "..."
+        msg = f"<b>{title}</b>"
+        if title_jp:
+            msg += f" ({title_jp})"
+        msg += f"\nType: {type_} | Ep: {episodes} | Score: {score} | Status: {status}"
+        if synopsis:
+            msg += f"\n\n{synopsis}"
+        msg += f"\n\n<a href='{a.get('url', '')}'>Xem trên MyAnimeList</a>"
+        img = a.get("images", {}).get("jpg", {}).get("large_image_url")
+        if img:
+            await update.message.reply_photo(photo=img, caption=msg, parse_mode="HTML")
+        else:
+            await update.message.reply_text(msg, parse_mode="HTML")
+    except Exception:
+        await update.message.reply_text("Lỗi tra anime.")
+
+
+async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import urllib.request, random
+    try:
+        subreddits = ["vozmemes", "VietNamMeme", "VietnameseMemes"]
+        sub = random.choice(subreddits)
+        url = f"https://www.reddit.com/r/{sub}/random.json"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        # Reddit returns a list with one element for random endpoint
+        if isinstance(data, list) and len(data) > 0:
+            data = data[0]
+        children = data.get("data", {}).get("children", [])
+        if not children:
+            await update.message.reply_text("Không có meme.")
+            return
+        post = children[0]["data"]
+        img_url = post.get("url_overridden_by_dest") or post.get("url", "")
+        title = post.get("title", "")
+        if img_url and any(img_url.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif"]):
+            await update.message.reply_photo(photo=img_url, caption=title)
+        else:
+            await update.message.reply_text(f"{title}\n{img_url}")
+    except Exception:
+        await update.message.reply_text("Lỗi lấy meme.")
+
+
 async def main():
     app = Application.builder().token(TOKEN).build()
 
@@ -687,6 +768,9 @@ async def main():
         BotCommand("list", "DS nhắc nhở"),
         BotCommand("code", "Chạy code Python"),
         BotCommand("password", "Tạo mật khẩu"),
+        BotCommand("calc", "Máy tính"),
+        BotCommand("anime", "Tra anime"),
+        BotCommand("meme", "Meme ngẫu nhiên"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -714,6 +798,9 @@ async def main():
     app.add_handler(CommandHandler("id", id_cmd))
     app.add_handler(CommandHandler("restart", restart_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("calc", calc_cmd))
+    app.add_handler(CommandHandler("anime", anime_cmd))
+    app.add_handler(CommandHandler("meme", meme_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
 
