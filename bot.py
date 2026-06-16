@@ -791,12 +791,15 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         variants = [
             {"smsType": 2, "mobilePhone": email},
             {"smsType": 2, "mobilePhone": email, "captchaVerifyParam": ""},
+            {"smsType": 2, "mobilePhone": email, "captchaVerifyParam": "{}"},
             {"smsType": 0, "mobilePhone": email},
             {"smsType": 1, "mobilePhone": email},
             {"smsType": 2, "email": email, "mobilePhone": email},
         ]
-        for rs in ["wechat-miniapp", "android"]:
-            hd2 = {**hd, "requestsource": rs}
+        sources = [("wechat-miniapp","web"), ("android","app"), ("ios","app"),
+                   ("miniapp","miniapp"), ("web","web"), ("app","app")]
+        for rs, ct in sources:
+            hd2 = {**hd, "requestsource": rs, "clientType": ct}
             for b in variants:
                 try:
                     r = jget(f"{bx}/sms/smsSend", data=json.dumps(b).encode(), headers=hd2, method="POST")
@@ -838,21 +841,30 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 sms_msg = reg.get("msg", "Lỗi reg")
         else:
-            # SMS failed → try register directly
             await st(f"⏳ [3b/5] Register thẳng...")
-            reg = jget(f"{bx}/user/register",
-                data=json.dumps({"email": email, "password": pw, "confirmPassword": pw}).encode(),
-                headers=hd, method="POST")
-            if reg.get("code") == 200:
+            reg = None; reg_msg = ""
+            reg_bodies = [
+                {"email": email, "password": pw, "confirmPassword": pw},
+                {"email": email, "password": pw},
+                {"email": email, "password": pw, "confirmPassword": pw, "channel": "web"},
+                {"mobilePhone": email, "password": pw, "confirmPassword": pw},
+                {"email": email, "password": pw, "confirmPassword": pw, "sourceType": 0},
+            ]
+            for b in reg_bodies:
+                try:
+                    reg = jget(f"{bx}/user/register", data=json.dumps(b).encode(), headers=hd, method="POST")
+                    if reg.get("code") == 200: break
+                    reg_msg = reg.get("msg", str(reg)[:100])
+                except Exception as ex:
+                    reg_msg = str(ex)[:100]
+            if reg and reg.get("code") == 200:
                 await st(f"⏳ Mua trial...")
                 trial = jget(f"{bx}/order/create",
                     data=json.dumps({"email": email, "type": 1}).encode(),
                     headers=hd, method="POST")
                 await st(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{'✅ Trial OK' if trial.get('code')==200 else '❌ Trial: '+str(trial.get('msg',''))[:50]}")
                 return
-            sms_msg = reg.get("msg", "Lỗi reg")
-
-        await st(f"❌ {sms_msg}\n📧 `{email}`\n👉 cloud.vmos.com")
+            await st(f"❌ {reg_msg or sms_msg}\n📧 `{email}`\n👉 cloud.vmos.com"); return
     except Exception as e:
         await st(f"❌ {str(e)[:200]}")
 
