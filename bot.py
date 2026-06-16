@@ -1127,11 +1127,21 @@ async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, info_msg):
                 if token:
                     trial = ""
                     hd2 = {**_VMOS_HD, "Token": token}
-                    for ep in ["/order/create", "/order/createMoneyOrder", "/cloudTemplate/buyGoodTimeOrder"]:
-                        tp = {"email": email, "type": 1}
-                        if "buyGoodTime" in ep:
-                            tp["goodId"] = ""
-                        rc2, rd2 = _vmos_req(f"{_BX}{ep}", tp, "POST", hd2, 10)
+                    trial_payloads = [
+                        (f"{_BX}/order/create", {"email": email, "type": 1}),
+                        (f"{_BX}/order/create", {"email": email, "type": 1, "goodsId": ""}),
+                        (f"{_BX}/order/create", {"email": email, "type": 1, "goodsId": "0"}),
+                        (f"{_BX}/order/create", {"email": email, "type": 1, "goodsId": "1"}),
+                        (f"{_BX}/order/create", {"email": email, "type": 2}),
+                        (f"{_BX}/order/createMoneyOrder", {"email": email, "type": 1}),
+                        (f"{_BX}/order/createMoneyOrder", {"email": email, "type": 1, "goodsId": ""}),
+                        (f"{_BX}/cloudTemplate/buyGoodTimeOrder", {"email": email, "type": 1, "goodId": ""}),
+                        (f"{_BX}/cloudTemplate/buyGoodTimeOrder", {"email": email, "goodId": ""}),
+                        (f"{_BX}/cloudTemplate/buyGoodTimeOrder", {"email": email}),
+                    ]
+                    for ep_url, tp in trial_payloads:
+                        rc2, rd2 = _vmos_req(ep_url, tp, "POST", hd2, 10)
+                        logger.debug(f"Trial {ep_url.split('/')[-1]} {tp}: HTTP={rc2}, resp={str(rd2)[:300]}")
                         if isinstance(rd2, dict) and rd2.get("code") in (200, 0):
                             trial = " | ✅ Trial"
                             break
@@ -1215,11 +1225,21 @@ async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if token:
         trial = ""
         hd2 = {**_VMOS_HD, "Token": token}
-        for ep in ["/order/create", "/order/createMoneyOrder", "/cloudTemplate/buyGoodTimeOrder"]:
-            tp = {"email": email, "type": 1}
-            if "buyGoodTime" in ep:
-                tp["goodId"] = ""
-            rc2, rd2 = _vmos_req(f"{_BX}{ep}", tp, "POST", hd2, 10)
+        trial_payloads = [
+            (f"{_BX}/order/create", {"email": email, "type": 1}),
+            (f"{_BX}/order/create", {"email": email, "type": 1, "goodsId": ""}),
+            (f"{_BX}/order/create", {"email": email, "type": 1, "goodsId": "0"}),
+            (f"{_BX}/order/create", {"email": email, "type": 1, "goodsId": "1"}),
+            (f"{_BX}/order/create", {"email": email, "type": 2}),
+            (f"{_BX}/order/createMoneyOrder", {"email": email, "type": 1}),
+            (f"{_BX}/order/createMoneyOrder", {"email": email, "type": 1, "goodsId": ""}),
+            (f"{_BX}/cloudTemplate/buyGoodTimeOrder", {"email": email, "type": 1, "goodId": ""}),
+            (f"{_BX}/cloudTemplate/buyGoodTimeOrder", {"email": email, "goodId": ""}),
+            (f"{_BX}/cloudTemplate/buyGoodTimeOrder", {"email": email}),
+        ]
+        for ep_url, tp in trial_payloads:
+            rc2, rd2 = _vmos_req(ep_url, tp, "POST", hd2, 10)
+            logger.debug(f"Trial {ep_url.split('/')[-1]} {tp}: HTTP={rc2}, resp={str(rd2)[:300]}")
             if isinstance(rd2, dict) and rd2.get("code") in (200, 0):
                 trial = " | ✅ Trial"
                 break
