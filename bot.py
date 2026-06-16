@@ -764,29 +764,40 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             body = e.read().decode(errors="replace")[:300]
             raise Exception(f"[{e.code}] {url[:80]}: {body}")
 
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    mh_common = {"Accept": "application/json", "User-Agent": ua}
+
     msg = await update.message.reply_text("⏳ [1/5] Tạo email...")
     try:
         mail_user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
         mail_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
 
-        d = jget("https://api.mail.tm/domains", headers={"Accept": "application/json"})
-        dom = d.get("hydra:member", [{}])[0].get("domain", "mail.tm")
+        # Try known domain first (faster, skip domain fetch)
+        dom = "cliptik.net"
         email = f"{mail_user}@{dom}"
-
-        acc = jget("https://api.mail.tm/accounts",
-            data=json.dumps({"address": email, "password": mail_pass}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            acc = jget("https://api.mail.tm/accounts",
+                data=json.dumps({"address": email, "password": mail_pass}).encode(),
+                headers={"Content-Type": "application/json", "User-Agent": ua}, method="POST")
+        except Exception:
+            d = jget("https://api.mail.tm/domains", headers=mh_common)
+            dom = d.get("hydra:member", [{}])[0].get("domain", "cliptik.net")
+            email = f"{mail_user}@{dom}"
+            acc = jget("https://api.mail.tm/accounts",
+                data=json.dumps({"address": email, "password": mail_pass}).encode(),
+                headers={"Content-Type": "application/json", "User-Agent": ua}, method="POST")
         email = acc.get("address", email)
 
         tok = jget("https://api.mail.tm/token",
             data=json.dumps({"address": email, "password": mail_pass}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers={"Content-Type": "application/json", "User-Agent": ua}, method="POST")
         token = tok.get("token", "")
-        mh = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        mh = {"Authorization": f"Bearer {token}", "Accept": "application/json", "User-Agent": ua}
 
         bx = "https://api.vmoscloud.com/vcpcloud/api"
         hd = {"Content-Type": "application/json", "Accept-Language": "vi", "clientType": "web",
-            "appVersion": "3.6.1401", "requestsource": "wechat-miniapp", "SupplierType": "0"}
+            "appVersion": "3.6.1401", "requestsource": "wechat-miniapp", "SupplierType": "0",
+            "User-Agent": ua}
 
         await st(f"⏳ [2/5] Kiểm tra email `{email}`...")
         ck = jget(f"{bx}/user/checkEmail?mobilePhone={urllib.parse.quote(email)}", headers=hd)
