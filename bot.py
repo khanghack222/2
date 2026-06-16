@@ -14,6 +14,7 @@ TOKEN = os.environ.get("BOT_TOKEN", "PASTE_BOT_TOKEN_HERE")
 ADMIN_ID = int(os.environ["ADMIN_ID"]) if "ADMIN_ID" in os.environ else None
 DATA_FILE = "reminders.json"
 PASSWORDS_FILE = "passwords.json"
+START_TIME = datetime.datetime.now()
 
 
 def load_reminders():
@@ -400,6 +401,24 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.warning(f"Update {update} caused error {context.error}")
 
 
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uptime = datetime.datetime.now() - START_TIME
+    days = uptime.days
+    hours, rem = divmod(uptime.seconds, 3600)
+    minutes, _ = divmod(rem, 60)
+    total_users = len(set(list(reminders.keys()) + list(passwords.keys())))
+    total_reminders = sum(len(v) for v in reminders.values())
+    total_passwords = sum(len(v) for v in passwords.values())
+    msg = (
+        f"Bot Status\n"
+        f"Thời gian chạy: {days}d {hours}h {minutes}m\n"
+        f"Người dùng: {total_users}\n"
+        f"Nhắc nhở: {total_reminders}\n"
+        f"Mật khẩu đã lưu: {total_passwords}"
+    )
+    await update.message.reply_text(msg)
+
+
 async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if ADMIN_ID is not None and user_id != ADMIN_ID:
@@ -454,6 +473,7 @@ async def main():
     app.add_handler(CommandHandler("code", code_cmd))
     app.add_handler(CommandHandler("screenshot", screenshot_cmd))
     app.add_handler(CommandHandler("restart", restart_cmd))
+    app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
 
