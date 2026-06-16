@@ -482,7 +482,7 @@ async def shorten_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     import urllib.request, urllib.parse
     try:
-        api = f"https://is.gd/create.php?format=simple&url={urllib.parse.quote(url)}"
+        api = f"https://tinyurl.com/api-create.php?url={urllib.parse.quote(url)}"
         req = urllib.request.Request(api, headers={"User-Agent": "curl/8.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             short = resp.read().decode("utf-8").strip()
