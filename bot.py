@@ -748,7 +748,7 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import urllib.request, urllib.parse, json, string, random
+    import urllib.request, urllib.parse, json, string, random, urllib.error
 
     async def st(t):
         nonlocal msg
@@ -756,9 +756,13 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
 
     def jget(url, data=None, method=None, headers=None):
-        r = urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers or {}, method=method), timeout=15)
-        j = json.loads(r.read().decode())
-        return j if isinstance(j, dict) else (j[0] if isinstance(j, list) and j else {})
+        try:
+            r = urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers or {}, method=method), timeout=15)
+            j = json.loads(r.read().decode())
+            return j if isinstance(j, dict) else (j[0] if isinstance(j, list) and j else {})
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")[:300]
+            raise Exception(f"[{e.code}] {url[:80]}: {body}")
 
     msg = await update.message.reply_text("⏳ [1/5] Tạo email...")
     try:
