@@ -755,24 +755,28 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: await msg.edit_text(t, parse_mode="Markdown")
         except: pass
 
+    def jget(url, data=None, method=None, headers=None):
+        r = urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers or {}, method=method), timeout=15)
+        j = json.loads(r.read().decode())
+        return j if isinstance(j, dict) else (j[0] if isinstance(j, list) and j else {})
+
     msg = await update.message.reply_text("⏳ [1/5] Tạo email...")
     try:
         mail_user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
         mail_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
 
-        dom = json.loads(urllib.request.urlopen(
-            urllib.request.Request("https://api.mail.tm/domains", headers={"Accept": "application/json"}),
-            timeout=10).read().decode()).get("hydra:member", [{}])[0].get("domain", "mail.tm")
+        d = jget("https://api.mail.tm/domains", headers={"Accept": "application/json"})
+        dom = d.get("hydra:member", [{}])[0].get("domain", "mail.tm")
         email = f"{mail_user}@{dom}"
 
-        acc = json.loads(urllib.request.urlopen(urllib.request.Request("https://api.mail.tm/accounts",
+        acc = jget("https://api.mail.tm/accounts",
             data=json.dumps({"address": email, "password": mail_pass}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST"), timeout=10).read().decode())
+            headers={"Content-Type": "application/json"}, method="POST")
         email = acc.get("address", email)
 
-        tok = json.loads(urllib.request.urlopen(urllib.request.Request("https://api.mail.tm/token",
+        tok = jget("https://api.mail.tm/token",
             data=json.dumps({"address": email, "password": mail_pass}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST"), timeout=10).read().decode())
+            headers={"Content-Type": "application/json"}, method="POST")
         token = tok.get("token", "")
         mh = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
@@ -781,9 +785,7 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "appVersion": "3.6.1401", "requestsource": "wechat-miniapp", "SupplierType": "0"}
 
         await st(f"⏳ [2/5] Kiểm tra email `{email}`...")
-        ck = json.loads(urllib.request.urlopen(
-            urllib.request.Request(f"{bx}/user/checkEmail?mobilePhone={urllib.parse.quote(email)}", headers=hd),
-            timeout=10).read().decode())
+        ck = jget(f"{bx}/user/checkEmail?mobilePhone={urllib.parse.quote(email)}", headers=hd)
         if ck.get("data") is not True:
             await st(f"⚠️ Email không khả dụng"); return
 
@@ -791,8 +793,7 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sms = None
         for b in [{"smsType": 2, "mobilePhone": email}, {"smsType": 2, "mobilePhone": email, "captchaVerifyParam": ""}]:
             try:
-                r = json.loads(urllib.request.urlopen(urllib.request.Request(f"{bx}/sms/smsSend",
-                    data=json.dumps(b).encode(), headers=hd, method="POST"), timeout=10).read().decode())
+                r = jget(f"{bx}/sms/smsSend", data=json.dumps(b).encode(), headers=hd, method="POST")
                 if r.get("code") == 200: sms = r; break
             except: continue
         if not sms:
@@ -802,13 +803,10 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i in range(20):
             await asyncio.sleep(3)
             try:
-                ms = json.loads(urllib.request.urlopen(
-                    urllib.request.Request("https://api.mail.tm/messages", headers=mh), timeout=10).read().decode())
+                ms = jget("https://api.mail.tm/messages", headers=mh)
                 ml = ms.get("hydra:member", [])
                 if ml:
-                    d = json.loads(urllib.request.urlopen(
-                        urllib.request.Request(f"https://api.mail.tm/messages/{ml[0]['id']}", headers=mh),
-                        timeout=10).read().decode())
+                    d = jget(f"https://api.mail.tm/messages/{ml[0]['id']}", headers=mh)
                     body = ""
                     for part in (d.get("html") or []):
                         body += part.get("value", "")
@@ -817,9 +815,9 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     codes = re.findall(r'\b\d{6}\b', body)
                     if codes:
                         await st(f"✅ [4/5] Mã: `{codes[0]}`\n⏳ [5/5] Đăng nhập...")
-                        lr = json.loads(urllib.request.urlopen(urllib.request.Request(f"{bx}/user/login",
+                        lr = jget(f"{bx}/user/login",
                             data=json.dumps({"mobilePhone": email, "loginType": 0, "verifyCode": codes[0], "channel": "web"}).encode(),
-                            headers=hd, method="POST"), timeout=10).read().decode())
+                            headers=hd, method="POST")
                         if lr.get("code") == 200:
                             t = lr.get("data", {}).get("token", "")
                             await st(f"🎉 **Hoàn tất!**\n📧 `{email}`\n🔑 Token: `{t[:50]}...`\n⏱ Trial 2h")
