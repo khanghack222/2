@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: telegram-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false        # set in Render dashboard (secret)
+      - key: ADMIN_ID
+        sync: false        # set in Render dashboard
+      - key: PASS_KEY
+        sync: false        # Fernet key (bắt buộc trên Render để giữ mật khẩu qua redeploy)
+      - key: PYTHON_VERSION
+        value: "3.12.4"

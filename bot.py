@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import functools
 import re
 import datetime
 import json
@@ -60,10 +61,64 @@ def save_json(path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+# --- Password encryption (Fernet) ---
+# FIX: passwords were stored in plaintext. We now encrypt passwords.json at rest.
+# Key comes from PASS_KEY env (preferred for deploy) or a local pass.key file
+# (auto-generated, gitignored). Legacy plaintext is migrated on first load.
+PASSWORDS_ENC_FILE = "passwords.enc"
+KEY_FILE = "pass.key"
+
+
+def _get_fernet():
+    from cryptography.fernet import Fernet
+    key = os.environ.get("PASS_KEY")
+    if key:
+        key = key.encode()
+    elif os.path.exists(KEY_FILE):
+        with open(KEY_FILE, "rb") as f:
+            key = f.read()
+    else:
+        key = Fernet.generate_key()
+        with open(KEY_FILE, "wb") as f:
+            f.write(key)
+        logger.warning("Generated new %s — back it up or set PASS_KEY env", KEY_FILE)
+    return Fernet(key)
+
+
+def save_passwords(data):
+    token = _get_fernet().encrypt(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+    with open(PASSWORDS_ENC_FILE, "wb") as f:
+        f.write(token)
+
+
+def load_passwords():
+    # Migrate legacy plaintext passwords.json -> encrypted passwords.enc (once)
+    if os.path.exists(PASSWORDS_FILE) and not os.path.exists(PASSWORDS_ENC_FILE):
+        legacy = safe_json_load(PASSWORDS_FILE, {})
+        save_passwords(legacy)
+        try:
+            os.remove(PASSWORDS_FILE)
+        except OSError:
+            pass
+        logger.info("Migrated plaintext passwords -> encrypted store")
+        return legacy
+    if not os.path.exists(PASSWORDS_ENC_FILE):
+        return {}
+    try:
+        with open(PASSWORDS_ENC_FILE, "rb") as f:
+            token = f.read()
+        if not token:
+            return {}
+        return json.loads(_get_fernet().decrypt(token).decode("utf-8"))
+    except Exception as e:
+        logger.warning("Cannot decrypt passwords: %s", e)
+        return {}
+
+
 # FIX: global mutable state is acceptable for single-process async,
 # but we add a deep-copy on write to prevent partial corruption
 reminders = safe_json_load(DATA_FILE, {})
-passwords = safe_json_load(PASSWORDS_FILE, {})
+passwords = load_passwords()
 
 
 # --- Async HTTP helpers (non-blocking) ---
@@ -117,6 +172,30 @@ def cache_set(key, value):
     _cache[key] = (time.monotonic(), value)
 
 
+# --- Per-user rate limiting (anti-spam) ---
+_last_call = {}
+
+
+def rate_limit(seconds=3):
+    """Limit each user to one call per `seconds` for a given command."""
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(update, context):
+            user = update.effective_user
+            key = (user.id, func.__name__)
+            now = time.monotonic()
+            elapsed = now - _last_call.get(key, 0.0)
+            if elapsed < seconds:
+                await update.message.reply_text(
+                    f"⏳ Chậm thôi nào! Thử lại sau {int(seconds - elapsed) + 1}s."
+                )
+                return
+            _last_call[key] = now
+            return await func(update, context)
+        return wrapper
+    return decorator
+
+
 # --- Van blacklist helpers ---
 def load_van_blacklist():
     return safe_json_load(VAN_BLACKLIST_FILE, [])
@@ -157,7 +236,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/meme - Meme ngẫu nhiên\n\n"
         "📌 **Học tập:**\n"
         "/van - Văn mẫu lớp 8\n"
-        "/dictionary <từ> - Tra từ điển\n\n"
+        "/dictionary <từ> - Tra từ điển\n"
+        "/wiki <từ khóa> - Tra Wikipedia\n\n"
+        "📌 **Tài chính:**\n"
+        "/crypto - Giá crypto\n"
+        "/tygia - Tỷ giá ngoại tệ → VND\n\n"
         "📌 **Lịch:**\n"
         "/lich - Lịch âm hôm nay\n"
         "/lich 30/4/2026 - Xem lịch ngày cụ thể\n\n"
@@ -206,6 +289,32 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+async def _fire_reminder(bot, user_id, rid, content, due_ts):
+    """Sleep until due_ts (absolute epoch) then deliver, surviving restarts."""
+    try:
+        await asyncio.sleep(max(0, due_ts - time.time()))
+        await bot.send_message(chat_id=int(user_id), text=f"⏰ Nhắc nhở #{rid}: {content}")
+    except Exception as e:
+        logger.warning(f"Failed to send reminder #{rid}: {e}")
+    finally:
+        if user_id in reminders:
+            reminders[user_id] = [r for r in reminders[user_id] if r["id"] != rid]
+            save_json(DATA_FILE, reminders)
+
+
+async def reschedule_reminders(bot):
+    """Re-arm reminders persisted in JSON after a restart."""
+    count = 0
+    for user_id, items in list(reminders.items()):
+        for r in items:
+            # legacy entries had no due_ts; fall back to original seconds from now
+            due_ts = r.get("due_ts", time.time() + r.get("seconds", 0))
+            asyncio.create_task(_fire_reminder(bot, user_id, r["id"], r["content"], due_ts))
+            count += 1
+    if count:
+        logger.info("Re-scheduled %d reminder(s) after startup", count)
+
+
 async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         seconds = int(context.args[0])
@@ -221,24 +330,14 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = str(update.effective_user.id)
         if user_id not in reminders:
             reminders[user_id] = []
-        rid = len(reminders[user_id]) + 1
-        reminders[user_id].append({"id": rid, "content": content, "seconds": seconds})
+        # FIX: use max+1 (not len+1) so ids don't collide after deletions
+        rid = max((r["id"] for r in reminders[user_id]), default=0) + 1
+        due_ts = time.time() + seconds
+        reminders[user_id].append({"id": rid, "content": content, "seconds": seconds, "due_ts": due_ts})
         save_json(DATA_FILE, reminders)
 
         await update.message.reply_text(f" Đã đặt nhắc nhở #{rid}: '{content}' sau {seconds}s")
-
-        async def remind_task():
-            try:
-                await asyncio.sleep(seconds)
-                await update.effective_user.send_message(f"⏰ Nhắc nhở #{rid}: {content}")
-            except Exception as e:
-                logger.warning(f"Failed to send reminder #{rid}: {e}")
-            finally:
-                if user_id in reminders:
-                    reminders[user_id] = [r for r in reminders[user_id] if r["id"] != rid]
-                    save_json(DATA_FILE, reminders)
-
-        asyncio.create_task(remind_task())
+        asyncio.create_task(_fire_reminder(context.application.bot, user_id, rid, content, due_ts))
     except (IndexError, ValueError):
         await update.message.reply_text("Sai cú pháp. Ví dụ: /remind 60 Mua sữa")
 
@@ -248,7 +347,12 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in reminders or not reminders[user_id]:
         await update.message.reply_text("Không có nhắc nhở nào.")
         return
-    lines = [f"#{r['id']} - {r['content']} (sau {r['seconds']}s)" for r in reminders[user_id]]
+    now = time.time()
+    lines = []
+    for r in reminders[user_id]:
+        left = int(r.get("due_ts", now + r.get("seconds", 0)) - now)
+        left = max(0, left)
+        lines.append(f"#{r['id']} - {r['content']} (còn {left}s)")
     await update.message.reply_text("Danh sách nhắc nhở:\n" + "\n".join(lines))
 
 
@@ -266,10 +370,17 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sai cú pháp. Ví dụ: /cancel 1")
 
 
+@rate_limit(3)
 async def dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     word = " ".join(context.args)
     if not word:
         await update.message.reply_text("Nhập từ cần tra. Ví dụ: /dictionary hello")
+        return
+
+    cache_key = f"dict:{word.lower()}"
+    cached = cache_get(cache_key, ttl=86400)
+    if cached:
+        await update.message.reply_text(cached)
         return
 
     try:
@@ -285,7 +396,10 @@ async def dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"({part}) {d['definition']}")
                 if d.get("example"):
                     lines.append(f"  VD: {d['example']}")
-        await update.message.reply_text("\n".join(lines) if len(lines) > 1 else "Không tìm thấy.")
+        result = "\n".join(lines) if len(lines) > 1 else "Không tìm thấy."
+        if len(lines) > 1:
+            cache_set(cache_key, result)
+        await update.message.reply_text(result)
     except Exception as e:
         logger.debug(f"Dictionary lookup failed: {e}")
         await update.message.reply_text(f"Không tìm thấy từ '{word}' hoặc lỗi API.")
@@ -307,6 +421,7 @@ WMO_CODES = {
 }
 
 
+@rate_limit(3)
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = " ".join(context.args)
     if not city:
@@ -368,7 +483,12 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Không tìm thấy '{city}'. Thử /weather hanoi")
 
 
+@rate_limit(5)
 async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cached = cache_get("ip", ttl=300)
+    if cached:
+        await update.message.reply_text(cached)
+        return
     try:
         data = await fetch_json("http://ip-api.com/json/")
         msg = (
@@ -378,6 +498,7 @@ async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"ISP: {data.get('isp')}\n"
             f"Lat/Lon: {data.get('lat')}, {data.get('lon')}"
         )
+        cache_set("ip", msg)
         await update.message.reply_text(msg)
     except Exception as e:
         logger.debug(f"IP lookup failed: {e}")
@@ -401,7 +522,7 @@ async def password_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # FIX: passwords stored in plaintext — for a personal bot this is acceptable,
     # but consider adding encryption for production use
     passwords[user_id].append({"id": idx, "label": label, "password": pw})
-    save_json(PASSWORDS_FILE, passwords)
+    save_passwords(passwords)
     await update.message.reply_text(
         f" Đã tạo & lưu mật khẩu #{idx}:\nTên: {label}\nMật khẩu: `{pw}`\n\nDùng /passwords để xem danh sách.",
         parse_mode="Markdown"
@@ -433,7 +554,7 @@ async def editpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for p in passwords[user_id]:
                 if p["id"] == pid:
                     p["password"] = new_val
-                    save_json(PASSWORDS_FILE, passwords)
+                    save_passwords(passwords)
                     await update.message.reply_text(f" Đã cập nhật mật khẩu #{pid}: `{new_val}`", parse_mode="Markdown")
                     return
         await update.message.reply_text(f"Không tìm thấy mật khẩu #{pid}")
@@ -447,7 +568,7 @@ async def delpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = str(update.effective_user.id)
         if user_id in passwords:
             passwords[user_id] = [p for p in passwords[user_id] if p["id"] != pid]
-            save_json(PASSWORDS_FILE, passwords)
+            save_passwords(passwords)
             await update.message.reply_text(f" Đã xóa mật khẩu #{pid}")
         else:
             await update.message.reply_text(f"Không tìm thấy mật khẩu #{pid}")
@@ -455,6 +576,7 @@ async def delpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sai cú pháp. VD: /delpass 1")
 
 
+@rate_limit(5)
 async def proxy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         urls = [
@@ -479,6 +601,7 @@ async def proxy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi lấy proxy.")
 
 
+@rate_limit(5)
 async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ext = context.args[0] if context.args else "py"
     await update.message.reply_text(
@@ -517,6 +640,7 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return True
 
 
+@rate_limit(10)
 async def screenshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = " ".join(context.args)
     if not url:
@@ -609,6 +733,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+@rate_limit(10)
 async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BASE = "https://vietjack.com"
     try:
@@ -689,6 +814,7 @@ async def van_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi lấy bài văn.")
 
 
+@rate_limit(3)
 async def translate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
     if not text:
@@ -709,6 +835,7 @@ async def translate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi dịch.")
 
 
+@rate_limit(3)
 async def shorten_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = " ".join(context.args)
     if not url:
@@ -723,6 +850,7 @@ async def shorten_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi rút gọn link.")
 
 
+@rate_limit(3)
 async def qr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
     if not text:
@@ -737,6 +865,7 @@ async def qr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi tạo QR.")
 
 
+@rate_limit(3)
 async def crypto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cached = cache_get("crypto", ttl=60)
     if cached:
@@ -761,6 +890,7 @@ async def crypto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi lấy giá crypto.")
 
 
+@rate_limit(3)
 async def joke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         url = "https://v2.jokeapi.dev/joke/Any?safe-mode"
@@ -794,7 +924,7 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Đang restart bot...")
     # FIX: flush JSON state before exit to prevent data loss
     save_json(DATA_FILE, reminders)
-    save_json(PASSWORDS_FILE, passwords)
+    save_passwords(passwords)
     logger.info("Bot restart initiated by user %s", user_id)
     sys.exit(0)
 
@@ -857,11 +987,23 @@ async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi tính toán.")
 
 
+@rate_limit(3)
 async def anime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = " ".join(context.args)
     if not query:
         await update.message.reply_text("Nhập tên anime. VD: /anime one piece")
         return
+
+    cache_key = f"anime:{query.lower()}"
+    cached = cache_get(cache_key, ttl=3600)
+    if cached:
+        msg, img = cached
+        if img:
+            await update.message.reply_photo(photo=img, caption=msg, parse_mode="HTML")
+        else:
+            await update.message.reply_text(msg, parse_mode="HTML")
+        return
+
     try:
         url = f"https://api.jikan.moe/v4/anime?q={urllib.parse.quote(query)}&limit=1"
         data = await fetch_json(url)
@@ -886,6 +1028,7 @@ async def anime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"\n\n{synopsis}"
         msg += f"\n\n<a href='{a.get('url', '')}'>Xem trên MyAnimeList</a>"
         img = a.get("images", {}).get("jpg", {}).get("large_image_url")
+        cache_set(cache_key, (msg, img))
         if img:
             await update.message.reply_photo(photo=img, caption=msg, parse_mode="HTML")
         else:
@@ -897,6 +1040,7 @@ async def anime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi tra anime.")
 
 
+@rate_limit(5)
 async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         subreddits = ["vozmemes", "VietNamMeme", "VietnameseMemes"]
@@ -921,6 +1065,72 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.debug(f"Meme failed: {e}")
         await update.message.reply_text("Lỗi lấy meme.")
+
+
+@rate_limit(3)
+async def wiki_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = " ".join(context.args)
+    if not query:
+        await update.message.reply_text("Nhập từ khóa. VD: /wiki Việt Nam")
+        return
+
+    cache_key = f"wiki:{query.lower()}"
+    cached = cache_get(cache_key, ttl=86400)
+    if cached:
+        await update.message.reply_text(cached)
+        return
+    try:
+        title = urllib.parse.quote(query.replace(" ", "_"))
+        url = f"https://vi.wikipedia.org/api/rest_v1/page/summary/{title}"
+        data = await fetch_json(url)
+        extract = data.get("extract")
+        if not extract:
+            await update.message.reply_text(f"Không tìm thấy '{query}' trên Wikipedia.")
+            return
+        page_url = data.get("content_urls", {}).get("desktop", {}).get("page", "")
+        msg = f"📖 **{data.get('title', query)}**\n\n{extract}"
+        if page_url:
+            msg += f"\n\n🔗 {page_url}"
+        cache_set(cache_key, msg)
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.debug(f"Wiki lookup failed: {e}")
+        await update.message.reply_text(f"Không tìm thấy '{query}' hoặc lỗi API.")
+
+
+@rate_limit(3)
+async def tygia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cached = cache_get("tygia", ttl=600)
+    if cached:
+        await update.message.reply_text(cached)
+        return
+    try:
+        data = await fetch_json("https://open.er-api.com/v6/latest/USD")
+        rates = data.get("rates", {})
+        vnd = rates.get("VND")
+        if not vnd:
+            await update.message.reply_text("Lỗi lấy tỷ giá.")
+            return
+        # quy đổi 1 đơn vị ngoại tệ -> VND qua trung gian USD
+        def to_vnd(code):
+            r = rates.get(code)
+            return vnd / r if r else None
+        pairs = [("🇺🇸 USD", vnd), ("🇪🇺 EUR", to_vnd("EUR")),
+                 ("🇯🇵 JPY", to_vnd("JPY")), ("🇬🇧 GBP", to_vnd("GBP")),
+                 ("🇨🇳 CNY", to_vnd("CNY")), ("🇰🇷 KRW", to_vnd("KRW"))]
+        lines = ["💱 **Tỷ giá sang VND:**"]
+        for name, v in pairs:
+            if v:
+                lines.append(f"{name}: {v:,.0f}đ")
+        updated = data.get("time_last_update_utc", "")[:16]
+        if updated:
+            lines.append(f"\n🕒 Cập nhật: {updated} UTC")
+        result = "\n".join(lines)
+        cache_set("tygia", result)
+        await update.message.reply_text(result)
+    except Exception as e:
+        logger.debug(f"Tygia failed: {e}")
+        await update.message.reply_text("Lỗi lấy tỷ giá.")
 
 
 # --- Lịch âm Việt Nam ---
@@ -1004,6 +1214,8 @@ async def main():
         BotCommand("anime", "Tra anime"),
         BotCommand("meme", "Meme ngẫu nhiên"),
         BotCommand("lich", "Lịch âm Việt Nam"),
+        BotCommand("wiki", "Tra Wikipedia"),
+        BotCommand("tygia", "Tỷ giá ngoại tệ"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -1035,6 +1247,8 @@ async def main():
     app.add_handler(CommandHandler("anime", anime_cmd))
     app.add_handler(CommandHandler("meme", meme_cmd))
     app.add_handler(CommandHandler("lich", lich_cmd))
+    app.add_handler(CommandHandler("wiki", wiki_cmd))
+    app.add_handler(CommandHandler("tygia", tygia_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
 
@@ -1056,6 +1270,9 @@ async def main():
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
+
+    # FIX: re-arm reminders that were persisted before the last restart
+    await reschedule_reminders(app.bot)
 
     # FIX: use an Event to allow graceful shutdown instead of while+sleep
     try:

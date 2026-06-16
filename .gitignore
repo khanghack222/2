@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 .env
+*.key
+*.enc
+.pytest_cache/
