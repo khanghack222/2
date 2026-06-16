@@ -78,42 +78,77 @@ def save_van_blacklist(data):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "Chào bạn! Tôi là bot cá nhân của bạn.\n\n"
-        "Lệnh:\n"
-        "/remind <giây> <nội dung> - Đặt nhắc nhở\n"
-        "/list - Xem danh sách nhắc nhở\n"
-        "/cancel <id> - Hủy nhắc nhở\n"
-        "/dictionary <từ> - Tra từ điển\n"
-        "/weather <thành phố> - Xem thời tiết\n"
-        "/ip - Check IP + vị trí\n"
-        "/password <số> - Tạo & lưu mật khẩu\n"
-        "/passwords - Xem pass đã lưu\n"
+        "📌 **Lệnh cơ bản:**\n"
+        "/help - Hướng dẫn chi tiết\n"
+        "/id - Thông tin của bạn\n"
+        "/status - Trạng thái bot\n\n"
+        "📌 **Tiện ích:**\n"
+        "/weather <tp> - Thời tiết\n"
+        "/translate <văn bản> - Dịch sang Anh\n"
+        "/shorten <url> - Rút gọn link\n"
+        "/qr <nội dung> - Tạo QR\n"
+        "/crypto - Giá crypto\n"
+        "/ip - IP + vị trí\n"
+        "/screenshot <url> - Chụp web\n\n"
+        "📌 **Công cụ:**\n"
+        "/code <ext> - Ảnh code đẹp (vd: /code py)\n"
+        "/calc <biểu thức> - Máy tính (/calc 2+2*pi)\n"
+        "/password <số> - Tạo mật khẩu\n"
+        "/passwords - DS mật khẩu\n"
         "/editpass <id> <mk> - Sửa pass\n"
         "/delpass <id> - Xóa pass\n"
-        "/proxy - Random proxy\n"
-        "/code <ext> - Ảnh code đẹp\n"
-        "/screenshot <url> - Chụp web\n"
-        "/help - Hướng dẫn"
+        "/proxy - Random proxy\n\n"
+        "📌 **Giải trí:**\n"
+        "/joke - Câu chuyện vui\n"
+        "/anime <tên> - Tra anime\n"
+        "/meme - Meme ngẫu nhiên\n\n"
+        "📌 **Học tập:**\n"
+        "/van - Văn mẫu lớp 8\n"
+        "/dictionary <từ> - Tra từ điển\n\n"
+        "📌 **VMOS:**\n"
+        "/vmos - Tạo VMOS Cloud trial (tự động)\n"
+        "/otp <mã> - Nhập OTP thủ công nếu auto lỗi\n\n"
+        "📌 **Khác:**\n"
+        "/remind <giây> <nd> - Đặt nhắc nhở\n"
+        "/list - DS nhắc nhở\n"
+        "/cancel <id> - Hủy nhắc nhở"
     )
-    # FIX: added parse_mode to prevent markdown issues
     await update.message.reply_text(msg)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "/remind 60 Mua sữa - Nhắc sau 60s\n"
-        "/remind 3600 Họp lúc 10h - Nhắc sau 1h\n"
-        "/list - Xem danh sách nhắc nhở\n"
-        "/cancel 1 - Hủy nhắc nhở số 1\n"
-        "/dictionary hello - Tra từ 'hello'\n"
-        "/weather hanoi - Xem thời tiết Hà Nội\n"
-        "/ip - IP + vị trí\n"
-        "/password 16 <tên> - Tạo & lưu mật khẩu\n"
-        "/passwords - Xem mật khẩu đã lưu\n"
-        "/editpass <id> <mk mới> - Sửa mật khẩu\n"
-        "/delpass <id> - Xóa mật khẩu\n"
-        "/proxy - Random proxy\n"
-        "/code py - Nhập code nhận ảnh đẹp\n"
-        "/screenshot https://... - Chụp ảnh web"
+        "📌 **Ví dụ từng lệnh:**\n\n"
+        "🌤 `/weather hanoi` — Thời tiết Hà Nội\n"
+        "🌤 `/weather hanoi,vi` — Tiếng Việt\n\n"
+        "🌐 `/translate hello world` — Dịch sang Anh\n"
+        "🌐 `/translate xin chào|vi|en` — Dịch từ Việt sang Anh\n\n"
+        "🔗 `/shorten https://example.com` — Rút gọn link\n\n"
+        "📱 `/qr https://example.com` — Tạo QR code\n\n"
+        "💰 `/crypto` — Giá BTC, ETH, SOL\n\n"
+        "📸 `/screenshot https://example.com` — Chụp ảnh web\n\n"
+        "🧮 `/calc 2+2*pi` — Máy tính (pi, e, sqrt, abs, round)\n"
+        "🧮 `/calc 2**10` — Luỹ thừa\n"
+        "🧮 `/calc sqrt(144)+abs(-5)` — Hàm\n\n"
+        "🔐 `/password 16` — Tạo mật khẩu 16 ký tự\n"
+        "🔐 `/password 20 email` — Tạo + lưu với tên 'email'\n"
+        "🔐 `/passwords` — Xem mật khẩu đã lưu\n"
+        "🔐 `/editpass 1 mkmoi` — Sửa mật khẩu số 1\n"
+        "🔐 `/delpass 1` — Xóa mật khẩu số 1\n\n"
+        "📖 `/dictionary hello` — Tra từ 'hello'\n\n"
+        "🎭 `/joke` — Câu chuyện vui\n\n"
+        "📺 `/anime naruto` — Tra anime Naruto\n\n"
+        "😂 `/meme` — Meme ngẫu nhiên từ Reddit\n\n"
+        "📝 `/van` — Văn mẫu lớp 8 ngẫu nhiên\n\n"
+        "🤖 `/vmos` — Tạo VMOS Cloud trial\n"
+        "🤖 `/otp 123456` — Nhập OTP thủ công cho VMOS\n\n"
+        "⏰ `/remind 60 Mua sữa` — Nhắc sau 60 giây\n"
+        "⏰ `/list` — Danh sách nhắc nhở\n"
+        "⏰ `/cancel 1` — Hủy nhắc nhở số 1\n\n"
+        "ℹ️ `/id` — Thông tin của bạn\n"
+        "ℹ️ `/status` — Trạng thái bot\n"
+        "ℹ️ `/ip` — IP + vị trí hiện tại\n"
+        "ℹ️ `/proxy` — Random proxy miễn phí"
     )
     await update.message.reply_text(msg)
 
@@ -809,37 +844,254 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lỗi lấy meme.")
 
 
-# In-memory store: user_id -> {"email": str, "password": str}
+# --- VMOS Cloud (mail.tm + auto-poll OTP) ---
+# In-memory store: user_id -> registration state
 _vmos_registrations: dict[int, dict] = {}
+_vmos_poll_tasks: dict[int, asyncio.Task] = {}
+
+_BX = "https://api.vmoscloud.com/vcpcloud/api"
+_VMOS_HD = {
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "requestsource": "wechat-miniapp",
+    "clientType": "web",
+    "appVersion": "3.6.1401",
+}
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+
+def _vmos_req(url, data=None, method="POST", headers=None, timeout=10):
+    h = dict(headers or {})
+    h.setdefault("User-Agent", _UA)
+    if data is not None:
+        h.setdefault("Content-Type", "application/json")
+    body = json.dumps(data).encode("utf-8") if data is not None else None
+    r = urllib.request.Request(url, data=body, headers=h, method=method)
+    try:
+        resp = urllib.request.urlopen(r, timeout=timeout)
+        return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8")
+        try:
+            return e.code, json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            return e.code, {"raw": raw}
+    except Exception as e:
+        return 0, {"error": str(e)}
+
+
+def _extract_otp_from_msg(msg_data):
+    body_text = ""
+    if isinstance(msg_data.get("text"), list):
+        for t in msg_data["text"]:
+            if isinstance(t, dict):
+                body_text += (t.get("content") or "")
+            elif isinstance(t, str):
+                body_text += t
+    elif isinstance(msg_data.get("text"), str):
+        body_text = msg_data["text"]
+
+    if not body_text and isinstance(msg_data.get("html"), list):
+        import html as _html
+        for h in msg_data["html"]:
+            if isinstance(h, str):
+                body_text += _html.unescape(re.sub(r"<[^>]+>", "", h))
+
+    subject = msg_data.get("subject") or ""
+    search_text = f"{subject}\n{body_text}"
+    codes = re.findall(r"(?<!\d)(\d{4,8})(?!\d)", search_text)
+    return codes[0] if codes else None
+
 
 async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
 
-    # Generate random email + password
-    name = "vm" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    email = f"{name}@synsky.com"
-    pw = str(random.randint(10000, 99999))
+    # Cancel any existing poll task
+    old = _vmos_poll_tasks.pop(user_id, None)
+    if old is not None:
+        old.cancel()
 
-    _vmos_registrations[user_id] = {"email": email, "password": pw}
+    msg = await update.message.reply_text("⏳ Đang tạo email ảo...")
 
-    await update.message.reply_text(
-        f"📧 `{email}`\n🔑 `{pw}`\n\n"
-        f"1️⃣ Mở https://cloud.vmoscloud.com/login\n"
-        f"2️⃣ Nhập **email trên** → bấm **Gửi mã**\n"
-        f"3️⃣ **Kéo mảnh ghép captcha**\n"
-        f"4️⃣ Sau đó nhập mã OTP: **/otp 123456**\n\n"
-        f"📌 Ví dụ: `/otp 531926`"
+    # 1. Fetch mail.tm domains
+    status, data = _vmos_req("https://api.mail.tm/domains", method="GET", timeout=10)
+    if status == 200 and isinstance(data, list):
+        domains = [d["domain"] for d in data if d.get("isActive")]
+    else:
+        domains = []
+    if not domains:
+        await msg.edit_text("❌ Không lấy được domain email tạm.")
+        return
+
+    # 2. Create mail.tm account
+    domain = random.choice(domains)
+    name = "v" + "".join(random.choices(string.ascii_lowercase + string.digits, k=7))
+    email = f"{name}@{domain}"
+    pw = str(random.randint(100000, 999999))
+
+    status, data = _vmos_req(
+        "https://api.mail.tm/accounts",
+        {"address": email, "password": pw},
+        "POST",
+        {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": _UA},
+        15,
     )
+    if status not in (200, 201):
+        err = data.get("violations", data.get("detail", str(data)[:100]))
+        await msg.edit_text(f"❌ Lỗi tạo email: {err}")
+        return
+
+    # 3. Get mail.tm token
+    status, data = _vmos_req(
+        "https://api.mail.tm/token",
+        {"address": email, "password": pw},
+        "POST",
+        {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": _UA},
+        15,
+    )
+    if status != 200 or not isinstance(data, dict):
+        await msg.edit_text("❌ Lỗi lấy token mail.")
+        return
+    mail_token = data.get("token") or data.get("id", "")
+
+    # 4. Store registration state
+    _vmos_registrations[user_id] = {
+        "email": email, "password": pw,
+        "mail_token": mail_token, "status": "waiting",
+    }
+
+    hint = (
+        "📌 **Hướng dẫn:**\n"
+        f"1. Mở https://cloud.vmoscloud.com/login\n"
+        f"2. Nhập `{email}` → bấm **Gửi mã**\n"
+        f"3. **Kéo captcha** → VMOS gửi OTP về email\n"
+        f"4. Bot tự động check và reg, **không cần gõ gì thêm**\n\n"
+        f"⏳ Nếu lâu quá, dùng `/otp <mã>` để nhập thủ công."
+    )
+
+    await msg.edit_text(
+        f"📧 `{email}`\n🔑 `{pw}`\n\n{hint}"
+    )
+
+    # 5. Start background polling
+    task = asyncio.create_task(
+        _vmos_poll_loop(user_id, chat_id, context.bot, mail_token, email, pw, msg)
+    )
+    _vmos_poll_tasks[user_id] = task
+
+
+async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, pw, info_msg):
+    """Poll mail.tm inbox for OTP, then auto-register + trial."""
+    try:
+        known_ids = set()
+        for attempt in range(35):
+            await asyncio.sleep(3)
+
+            status, data = _vmos_req(
+                "https://api.mail.tm/messages?page=1",
+                method="GET",
+                headers={"Authorization": f"Bearer {mail_token}", "Accept": "application/json", "User-Agent": _UA},
+                timeout=10,
+            )
+            if status != 200:
+                continue
+            msgs = data if isinstance(data, list) else []
+            new_msgs = [m for m in msgs if isinstance(m, dict) and m.get("id") not in known_ids]
+
+            for m in new_msgs:
+                known_ids.add(m["id"])
+                mid = m["id"]
+
+                status, detail = _vmos_req(
+                    f"https://api.mail.tm/messages/{mid}",
+                    method="GET",
+                    headers={"Authorization": f"Bearer {mail_token}", "Accept": "application/json", "User-Agent": _UA},
+                    timeout=10,
+                )
+                if status != 200:
+                    continue
+
+                otp = _extract_otp_from_msg(detail)
+                if not otp:
+                    continue
+
+                # Found OTP!
+                await bot.edit_message_text(
+                    f"📧 `{email}`\n🔑 `{pw}`\n\n✅ Nhận được OTP: `{otp}`\n⏳ Đang reg...",
+                    chat_id=chat_id, message_id=info_msg.message_id,
+                )
+
+                # Register via VMOS API
+                reg_ok = False
+                token = None
+                reg_payloads = [
+                    {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
+                    {"mobilePhone": email, "password": pw, "verifyCode": otp},
+                    {"email": email, "password": pw, "verifyCode": otp},
+                ]
+                for p in reg_payloads:
+                    ep = f"{_BX}/user/login" if "loginType" in p else f"{_BX}/user/register"
+                    rc, rd = _vmos_req(ep, p, "POST", _VMOS_HD, 10)
+                    if isinstance(rd, dict) and rd.get("code") == 200:
+                        reg_ok = True
+                        token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
+                        break
+
+                if reg_ok:
+                    trial = ""
+                    hd2 = {**_VMOS_HD}
+                    if token:
+                        hd2["Token"] = token
+                    for ep in ["/order/create", "/order/createMoneyOrder", "/cloudTemplate/buyGoodTimeOrder"]:
+                        tp = {"email": email, "type": 1}
+                        if "buyGoodTime" in ep:
+                            tp["goodId"] = ""
+                        rc2, rd2 = _vmos_req(f"{_BX}{ep}", tp, "POST", hd2, 10)
+                        if isinstance(rd2, dict) and rd2.get("code") == 200:
+                            trial = " | ✅ Trial"
+                            break
+                    await bot.edit_message_text(
+                        f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`{trial}",
+                        chat_id=chat_id, message_id=info_msg.message_id,
+                    )
+                else:
+                    await bot.edit_message_text(
+                        f"✅ Có OTP `{otp}` nhưng reg API lỗi.\n"
+                        f"👉 Vào cloud.vmoscloud.com/login nhập OTP `{otp}`, set pass `{pw}` thủ công.",
+                        chat_id=chat_id, message_id=info_msg.message_id,
+                    )
+                return  # done
+
+        # Timeout — no OTP received
+        await bot.edit_message_text(
+            f"⏰ Quá thời gian chờ OTP.\n"
+            f"📧 `{email}`\n🔑 `{pw}`\n\n"
+            f"👉 Dùng `/otp <số>` nếu đã nhận được mail.",
+            chat_id=chat_id, message_id=info_msg.message_id,
+        )
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        try:
+            await bot.edit_message_text(
+                f"❌ Lỗi: {e}",
+                chat_id=chat_id, message_id=info_msg.message_id,
+            )
+        except:
+            pass
+    finally:
+        _vmos_poll_tasks.pop(user_id, None)
 
 
 async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     user_id = update.effective_user.id
-
     reg = _vmos_registrations.get(user_id)
     if not reg:
-        await update.message.reply_text("❌ Chưa chạy `/vmos` trước đó.")
+        await update.message.reply_text(
+            "❌ Chưa chạy `/vmos`.\n"
+            "📌 `/vmos` → bot tạo email → bạn nhập email vào cloud.vmoscloud.com/login → nhận OTP → `/otp <mã>`"
+        )
         return
 
     args = context.args
@@ -848,88 +1100,47 @@ async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     otp = args[0].strip()
-    if not re.match(r'^\d{4,8}$', otp):
+    if not re.match(r"^\d{4,8}$", otp):
         await update.message.reply_text("❌ Mã OTP không hợp lệ (4-8 số)")
         return
 
     email = reg["email"]
     pw = reg["password"]
-    msg = await update.message.reply_text(f"⏳ Đang reg + trial...")
+    msg = await update.message.reply_text("⏳ Đang reg + trial...")
 
-    bx = "https://api.vmoscloud.com/vcpcloud/api"
-    hd = {
-        "Content-Type": "application/json",
-        "User-Agent": ua,
-        "requestsource": "wechat-miniapp",
-        "clientType": "web",
-        "appVersion": "3.6.1401",
-    }
-
-    reg_success = False
+    reg_ok = False
     token = None
-    for payload in [
+    payloads = [
         {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
         {"mobilePhone": email, "password": pw, "verifyCode": otp},
         {"email": email, "password": pw, "verifyCode": otp},
-    ]:
-        try:
-            endpoint = f"{bx}/user/login" if "loginType" in payload else f"{bx}/user/register"
-            r_raw = urllib.request.urlopen(
-                urllib.request.Request(
-                    endpoint,
-                    data=json.dumps(payload).encode(),
-                    headers=hd,
-                    method="POST",
-                ),
-                timeout=10,
-            ).read().decode()
-            reg_resp = json.loads(r_raw)
-            rd = reg_resp if isinstance(reg_resp, dict) else (reg_resp[0] if isinstance(reg_resp, list) and reg_resp else {})
-            rc = rd.get("code")
-            if rc == 200:
-                reg_success = True
-                token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
-                break
-            elif rc == 1056:
-                await msg.edit_text(f"⏳ Mã OTP sai, thử payload khác...")
-                continue
-        except Exception as reg_e:
-            logger.debug(f"Payload {list(payload.keys())} failed: {reg_e}")
-            continue
+    ]
+    for p in payloads:
+        ep = f"{_BX}/user/login" if "loginType" in p else f"{_BX}/user/register"
+        rc, rd = _vmos_req(ep, p, "POST", _VMOS_HD, 10)
+        if isinstance(rd, dict) and rd.get("code") == 200:
+            reg_ok = True
+            token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
+            break
 
-    if reg_success:
-        trial_msg = ""
-        hd2 = {**hd}
+    if reg_ok:
+        trial = ""
+        hd2 = {**_VMOS_HD}
         if token:
             hd2["Token"] = token
-        for trial_ep in ["/order/create", "/order/createMoneyOrder", "/cloudTemplate/buyGoodTimeOrder"]:
-            try:
-                trial_payload = {}
-                if "order" in trial_ep:
-                    trial_payload = {"email": email, "type": 1}
-                else:
-                    trial_payload = {"email": email, "type": 1, "goodId": ""}
-                t_raw = urllib.request.urlopen(
-                    urllib.request.Request(
-                        f"{bx}{trial_ep}",
-                        data=json.dumps(trial_payload).encode(),
-                        headers=hd2,
-                        method="POST",
-                    ),
-                    timeout=10,
-                ).read().decode()
-                tj = json.loads(t_raw)
-                td = tj if isinstance(tj, dict) else {}
-                if td.get("code") == 200:
-                    trial_msg = " | ✅ Trial"
-                    break
-            except Exception:
-                continue
-        await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`{trial_msg}")
+        for ep in ["/order/create", "/order/createMoneyOrder", "/cloudTemplate/buyGoodTimeOrder"]:
+            tp = {"email": email, "type": 1}
+            if "buyGoodTime" in ep:
+                tp["goodId"] = ""
+            rc2, rd2 = _vmos_req(f"{_BX}{ep}", tp, "POST", hd2, 10)
+            if isinstance(rd2, dict) and rd2.get("code") == 200:
+                trial = " | ✅ Trial"
+                break
+        await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`{trial}")
     else:
         await msg.edit_text(
-            f"❌ Reg API lỗi dù đã có OTP\n"
-            f"👉 Vào cloud.vmoscloud.com/login nhập OTP `{otp}` set pass `{pw}` thủ công"
+            f"❌ Reg API lỗi.\n"
+            f"👉 Vào cloud.vmoscloud.com/login nhập OTP `{otp}`, set pass `{pw}` thủ công"
         )
 
 
