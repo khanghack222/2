@@ -1099,45 +1099,45 @@ async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, pw, info_msg
                 if not otp:
                     continue
 
-                # Found OTP!
+                # Found OTP! Tell user to register manually on the website.
                 await bot.edit_message_text(
-                    f"📧 `{email}`\n🔑 `{pw}`\n\n✅ Nhận được OTP: `{otp}`\n⏳ Đang reg...",
+                    f"📧 `{email}`\n🔑 `{pw}`\n"
+                    f"✅ OTP: `{otp}`\n\n"
+                    f"1️⃣ Mở https://cloud.vmoscloud.com/login\n"
+                    f"2️⃣ Nhập email, dán OTP `{otp}`, set pass `{pw}`\n"
+                    f"3️⃣ Bấm đăng ký\n\n"
+                    f"⏳ Bot chờ 40s rồi tự login + trial...",
                     chat_id=chat_id, message_id=info_msg.message_id,
                 )
 
-                # Register via VMOS API
-                reg_ok = False
+                # Wait for user to register manually
+                await asyncio.sleep(40)
+
+                # Now try to login with password
+                import hashlib
+                pw_md5 = hashlib.md5(pw.encode()).hexdigest()
                 token = None
-                last_err = ""
-                reg_payloads = [
-                    {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
-                    {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web", "scene": "login"},
-                    {"email": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
-                    {"mobilePhone": email, "password": pw, "verifyCode": otp},
-                    {"email": email, "password": pw, "verifyCode": otp},
-                    {"account": email, "loginType": 0, "verifyCode": otp},
+                login_payloads = [
+                    {"email": email, "loginType": 1, "password": pw_md5, "channel": "web"},
+                    {"mobilePhone": email, "loginType": 1, "password": pw_md5, "channel": "web"},
+                    {"email": email, "password": pw, "channel": "web"},
+                    {"mobilePhone": email, "password": pw, "channel": "web"},
                 ]
-                for p in reg_payloads:
-                    ep = f"{_BX}/user/login" if "loginType" in p else f"{_BX}/user/register"
-                    rc, rd = _vmos_req(ep, p, "POST", _VMOS_HD, 10)
-                    logger.debug(f"VMOS reg payload {list(p.keys())}: HTTP={rc}, resp={str(rd)[:500]}")
+                for lp in login_payloads:
+                    rc, rd = _vmos_req(f"{_BX}/user/login", lp, "POST", _VMOS_HD, 10)
+                    logger.debug(f"VMOS login payload {list(lp.keys())}: HTTP={rc}, resp={str(rd)[:500]}")
                     if isinstance(rd, dict):
                         for k in ("code", "status", "resultCode", "success"):
                             v = rd.get(k)
                             if v in (200, 0, "200", "0", True):
-                                reg_ok = True
+                                token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
                                 break
-                        if not reg_ok:
-                            last_err = str(rd.get("message") or rd.get("msg") or rd.get("errorMsg") or str(rd)[:200])
-                    if reg_ok:
-                        token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
+                    if token:
                         break
 
-                if reg_ok:
+                if token:
                     trial = ""
-                    hd2 = {**_VMOS_HD}
-                    if token:
-                        hd2["Token"] = token
+                    hd2 = {**_VMOS_HD, "Token": token}
                     for ep in ["/order/create", "/order/createMoneyOrder", "/cloudTemplate/buyGoodTimeOrder"]:
                         tp = {"email": email, "type": 1}
                         if "buyGoodTime" in ep:
@@ -1152,8 +1152,8 @@ async def _vmos_poll_loop(user_id, chat_id, bot, mail_token, email, pw, info_msg
                     )
                 else:
                     await bot.edit_message_text(
-                        f"✅ Có OTP `{otp}` nhưng reg API lỗi: {last_err[:200]}\n"
-                        f"👉 Vào cloud.vmoscloud.com/login nhập OTP `{otp}`, set pass `{pw}` thủ công.",
+                        f"✅ OTP `{otp}` — login API chưa được (mày reg chưa?).\n"
+                        f"👉 Đăng nhập https://cloud.vmoscloud.com bằng `{email}` / `{pw}`",
                         chat_id=chat_id, message_id=info_msg.message_id,
                     )
                 return  # done
@@ -1201,40 +1201,37 @@ async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     email = reg["email"]
     pw = reg["password"]
-    msg = await update.message.reply_text("⏳ Đang reg + trial...")
+    msg = await update.message.reply_text(
+        f"ℹ️ Mở https://cloud.vmoscloud.com/login\n"
+        f"Nhập email, OTP `{otp}`, pass `{pw}` → đăng ký xong ✅\n"
+        f"Bot chờ 40s rồi auto login + trial..."
+    )
+    await asyncio.sleep(40)
 
-    reg_ok = False
+    import hashlib
+    pw_md5 = hashlib.md5(pw.encode()).hexdigest()
     token = None
-    last_err = ""
-    payloads = [
-        {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
-        {"mobilePhone": email, "loginType": 0, "verifyCode": otp, "channel": "web", "scene": "login"},
-        {"email": email, "loginType": 0, "verifyCode": otp, "channel": "web"},
-        {"mobilePhone": email, "password": pw, "verifyCode": otp},
-        {"email": email, "password": pw, "verifyCode": otp},
-        {"account": email, "loginType": 0, "verifyCode": otp},
+    login_payloads = [
+        {"email": email, "loginType": 1, "password": pw_md5, "channel": "web"},
+        {"mobilePhone": email, "loginType": 1, "password": pw_md5, "channel": "web"},
+        {"email": email, "password": pw, "channel": "web"},
+        {"mobilePhone": email, "password": pw, "channel": "web"},
     ]
-    for p in payloads:
-        ep = f"{_BX}/user/login" if "loginType" in p else f"{_BX}/user/register"
-        rc, rd = _vmos_req(ep, p, "POST", _VMOS_HD, 10)
-        logger.debug(f"OTP reg payload {dict(p)}: HTTP={rc}, resp={str(rd)[:500]}")
+    for lp in login_payloads:
+        rc, rd = _vmos_req(f"{_BX}/user/login", lp, "POST", _VMOS_HD, 10)
+        logger.debug(f"OTP login payload {list(lp.keys())}: HTTP={rc}, resp={str(rd)[:500]}")
         if isinstance(rd, dict):
             for k in ("code", "status", "resultCode", "success"):
                 v = rd.get(k)
                 if v in (200, 0, "200", "0", True):
-                    reg_ok = True
+                    token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
                     break
-            if not reg_ok:
-                last_err = str(rd.get("message") or rd.get("msg") or rd.get("errorMsg") or str(rd)[:200])
-        if reg_ok:
-            token = (rd.get("data") or {}).get("token") if isinstance(rd.get("data"), dict) else None
+        if token:
             break
 
-    if reg_ok:
+    if token:
         trial = ""
-        hd2 = {**_VMOS_HD}
-        if token:
-            hd2["Token"] = token
+        hd2 = {**_VMOS_HD, "Token": token}
         for ep in ["/order/create", "/order/createMoneyOrder", "/cloudTemplate/buyGoodTimeOrder"]:
             tp = {"email": email, "type": 1}
             if "buyGoodTime" in ep:
@@ -1246,8 +1243,8 @@ async def otp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`{trial}")
     else:
         await msg.edit_text(
-            f"❌ Reg API lỗi: {last_err[:150]}\n"
-            f"👉 Vào cloud.vmoscloud.com/login nhập OTP `{otp}`, set pass `{pw}` thủ công"
+            f"❌ Chưa login được (mày reg chưa?).\n"
+            f"👉 Đăng nhập https://cloud.vmoscloud.com bằng `{email}` / `{pw}`"
         )
 
 
