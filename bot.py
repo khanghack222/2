@@ -764,8 +764,9 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(
             f"📧 `{email}`\n🔑 `{pw}`\n\n"
             f"1️⃣ Mở https://cloud.vmoscloud.com/buy\n"
-            f"2️⃣ Nhập email + pass trên → gửi mã\n"
-            f"3️⃣ **Kéo mảnh ghép captcha**\n\n"
+            f"2️⃣ Nhập email trên → bấm gửi mã\n"
+            f"3️⃣ **Kéo mảnh ghép captcha**\n"
+            f"4️⃣ **Đừng** nhập pass hay OTP — để đó bot lo\n\n"
             f"🔄 Bot đang chờ mail... (tối đa 2p)")
 
         for i in range(40):
@@ -775,7 +776,7 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msgs = (r if isinstance(r, dict) else {}).get("list", [])
                 if not msgs:
                     if i > 0 and i % 4 == 0:
-                        await msg.edit_text(f"📧 `{email}` | ⏳ {(i+1)*3}s...\n👉 Giải captcha ở cloud.vmos.com xong chưa?")
+                        await msg.edit_text(f"📧 `{email}` | ⏳ {(i+1)*3}s...\n👉 Giải captcha ở cloud.vmoscloud.com/buy chưa?")
                     continue
                 d = json.loads(urllib.request.urlopen(urllib.request.Request(f"{gm}?f=fetch_email&email_id={msgs[0].get('mail_id','')}&sid_token={sid}", headers={"User-Agent": ua}), timeout=10).read().decode())
                 body = html_mod.unescape((d if isinstance(d, dict) else {}).get("mail_body", "") or "")
@@ -786,9 +787,9 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     bx = "https://api.vmoscloud.com/vcpcloud/api"
                     hd = {"Content-Type": "application/json", "User-Agent": ua, "requestsource": "wechat-miniapp", "clientType": "web", "appVersion": "3.6.1401"}
                     for b in [
-                        {"email": email, "password": pw, "confirmPassword": pw, "verifyCode": otp},
-                        {"email": email, "password": pw, "confirmPassword": pw},
                         {"mobilePhone": email, "password": pw, "confirmPassword": pw, "verifyCode": otp},
+                        {"mobilePhone": email, "password": pw, "confirmPassword": pw, "verifyCode": otp, "channel": "web"},
+                        {"email": email, "password": pw, "confirmPassword": pw, "verifyCode": otp},
                     ]:
                         try:
                             r = urllib.request.urlopen(urllib.request.Request(f"{bx}/user/register", data=json.dumps(b).encode(), headers=hd, method="POST"), timeout=10)
@@ -799,12 +800,12 @@ async def vmos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     t = urllib.request.urlopen(urllib.request.Request(f"{bx}/order/create", data=json.dumps({"email": email, "type": 1}).encode(), headers=hd, method="POST"), timeout=10)
                                     tj = json.loads(t.read().decode())
                                     td = tj if isinstance(tj, dict) else {}
-                                    await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{'✅ Trial' if td.get('code')==200 else '❌ '+str(td.get('msg',''))[:30]}")
+                                    await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n{'✅ Trial' if td.get('code')==200 else '❌ Trial: '+str(td.get('msg',''))[:30]}")
                                 except:
                                     await msg.edit_text(f"🎉 **Acc VMOS**\n📧 `{email}`\n🔑 `{pw}`\n✅ Reg OK")
                                 return
                         except: pass
-                    await msg.edit_text(f"✅ Có mã `{otp}` nhưng reg lỗi\n📧 `{email}`\n🔑 `{pw}`\n👉 Reg tay: cloud.vmos.com")
+                    await msg.edit_text(f"✅ Có mã `{otp}` nhưng reg API lỗi\n👉 Vào cloud.vmoscloud.com/buy nhập OTP `{otp}` set pass `{pw}`")
                     return
             except: pass
         await msg.edit_text(f"❌ Hết giờ\n📧 `{email}`\n🔑 `{pw}`\n📬 https://www.guerrillamail.com/")
