@@ -37,6 +37,8 @@ if ADMIN_ID is None:
     logger.warning("ADMIN_ID not set — /restart disabled for all users")
 
 DATA_FILE = "reminders.json"
+API2_BYPASS_URL = "http://fi5.bot-hosting.net:22301/bypass"
+API2_BYPASS_KEY = "thi-thi"
 PASSWORDS_FILE = "passwords.json"
 START_TIME = datetime.datetime.now()
 VAN_BLACKLIST_FILE = "van_blacklist.json"
@@ -231,7 +233,8 @@ MENU_SECTIONS = {
         "`/passwords` — DS mật khẩu đã lưu\n"
         "`/editpass`  — Sửa mật khẩu\n"
         "`/delpass`   — Xoá mật khẩu\n"
-        "`/proxy`     — Proxy miễn phí ngẫu nhiên"),
+        "`/proxy`     — Proxy miễn phí ngẫu nhiên\n"
+        "`/bypass`    — Bypass link rút gọn"),
     "giaitri": ("🎭  Giải trí",
         "`/joke`      — Chuyện cười ngẫu nhiên\n"
         "`/anime`     — Tra cứu anime\n"
@@ -362,6 +365,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/cancel 1`               — Huỷ nhắc nhở số 1\n\n"
         "**Hệ thống**\n"
         "  `/id`                     — Thông tin Telegram của bạn\n"
+        "  `/bypass`                 — Bypass link rút gọn\n"
         "  `/status`                 — Trạng thái & thời gian hoạt động\n"
         "  `/ip`                     — IP & vị trí của bạn\n"
         "  `/proxy`                  — Proxy miễn phí ngẫu nhiên"
@@ -684,6 +688,39 @@ async def proxy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Proxy cmd: {e}")
         await update.message.reply_text("Loi lay proxy.")
+
+
+@rate_limit(3)
+async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    link = " ".join(context.args)
+    if not link:
+        await update.message.reply_text(
+            "🔗 **Bypass Link**\n\n"
+            "Dùng: `/bypass <url>` — Bỏ qua link rút gọn, lấy link gốc.\n\n"
+            "Ví dụ: `/bypass https://shorturl.at/abc123`",
+            parse_mode="Markdown"
+        )
+        return
+    if not link.startswith("http"):
+        link = "https://" + link
+    try:
+        params = urllib.parse.urlencode({"link": link, "key": API2_BYPASS_KEY})
+        url = f"{API2_BYPASS_URL}?{params}"
+        data = await fetch_json(url, headers={"User-Agent": "curl/8.0"}, timeout=15)
+        # Try to extract result from common response patterns
+        result = data.get("result") or data.get("data") or data.get("url") or data.get("bypass") or json.dumps(data, ensure_ascii=False)
+        msg = (
+            f"🔓 **Kết quả Bypass:**\n\n"
+            f"{result}"
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except RateLimited:
+        await update.message.reply_text("⏳ API bypass đang bị giới hạn, thử lại sau.")
+    except Exception as e:
+        logger.debug(f"Bypass failed: {e}")
+        await update.message.reply_text("❌ Lỗi bypass link. Kiểm tra lại URL hoặc thử lại sau.")
+
+
 @rate_limit(5)
 async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ext = context.args[0] if context.args else "py"
@@ -1312,6 +1349,7 @@ async def main():
         BotCommand("lich", "Lịch âm Việt Nam"),
         BotCommand("wiki", "Tra Wikipedia"),
         BotCommand("tygia", "Tỷ giá ngoại tệ"),
+        BotCommand("bypass", "Bypass link rút gọn"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -1346,6 +1384,7 @@ async def main():
     app.add_handler(CommandHandler("lich", lich_cmd))
     app.add_handler(CommandHandler("wiki", wiki_cmd))
     app.add_handler(CommandHandler("tygia", tygia_cmd))
+    app.add_handler(CommandHandler("bypass", bypass_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
 
