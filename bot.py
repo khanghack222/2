@@ -42,6 +42,16 @@ API2_BYPASS_KEY = "thi-thi"
 PASSWORDS_FILE = "passwords.json"
 START_TIME = datetime.datetime.now()
 VAN_BLACKLIST_FILE = "van_blacklist.json"
+VAN_BLACKLIST_FILE = "van_blacklist.json"
+
+# Proxy list: paste proxy của bạn vào đây, mỗi dòng 1 cái
+# Định dạng: ip:port hoặc user:pass@ip:port
+PROXY_LIST = [
+    # Thay proxy của bạn vào bên dưới, ví dụ:
+    # "proxy1.example.com:8080",
+    # "user:pass@proxy2.example.com:3128",
+]
+
 
 
 # FIX: safe JSON loading with corruption recovery
@@ -251,6 +261,13 @@ MENU_SECTIONS = {
         "`/remind`    — Đặt nhắc nhở\n"
         "`/list`      — DS nhắc nhở\n"
         "`/cancel`    — Huỷ nhắc nhở"),
+    "tiktok": ("🎵  TikTok",
+        "`/tiktok <url>`      — Tải video không logo\n"
+        "`/tiktok_profile <u>` — Xem profile\n"
+        "`/tiktok_search <kw>` — Tìm kiếm video\n"
+        "`/tiktok_trending`   — Video thịnh hành\n"
+        "`/tiktok_seo <kw>`   — Gợi ý SEO\n"
+        "`/tiktok_hashtag <t>` — Tra hashtag"),
     "khac": ("ℹ️  Hệ thống",
         "`/id`        — Thông tin Telegram của bạn\n"
         "`/status`    — Trạng thái & thời gian hoạt động\n"
@@ -368,7 +385,14 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/bypass`                 — Bypass link rút gọn\n"
         "  `/status`                 — Trạng thái & thời gian hoạt động\n"
         "  `/ip`                     — IP & vị trí của bạn\n"
-        "  `/proxy`                  — Proxy miễn phí ngẫu nhiên"
+        "  `/proxy`                  — Proxy miễn phí ngẫu nhiên\n\n"
+        "**TikTok**\n"
+        "  `/tiktok <url>`              — Tải video không logo\n"
+        "  `/tiktok_profile <username>` — Xem profile TikTok\n"
+        "  `/tiktok_search <từ khóa>`  — Tìm kiếm video\n"
+        "  `/tiktok_trending`           — Video thịnh hành\n"
+        "  `/tiktok_seo <từ khóa>`    — Gợi ý SEO\n"
+        "  `/tiktok_hashtag <tag>`      — Tra hashtag"
     )
     await update.message.reply_text(msg)
 
@@ -661,7 +685,16 @@ async def delpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _fetch_free():
-    urls = ["https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all", "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt"]
+    urls = [
+        "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
+        "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
+        "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
+        "https://raw.githubusercontent.com/ngosang/proxies/main/proxies.txt",
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
+        "https://raw.githubusercontent.com/opsxcq/proxy-list/master/list.txt",
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+        "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+    ]
     proxies = []
     for url in urls:
         try:
@@ -676,15 +709,20 @@ async def proxy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         n = 1
         if context.args:
-            try: n = max(1, min(20, int(context.args[0])))
+            try: n = max(1, min(50, int(context.args[0])))
             except: pass
-        proxies = await _fetch_free()
+        if PROXY_LIST:
+            proxies = PROXY_LIST
+        else:
+            proxies = await _fetch_free()
+        proxies = list(dict.fromkeys(p for p in proxies if p))
         if proxies:
-            picked = [secrets.choice(proxies) for _ in range(n)]
-            msg = f"Free proxy ({n} cai):\n" + "\n".join(f"`{p}`" for p in picked)
+            n = min(n, len(proxies))
+            picked = random.sample(proxies, n)
+            msg = f"Proxy ({n} cai):\n\n" + "\n".join(f"`{p}`" for p in picked)
             await update.message.reply_text(msg, parse_mode="Markdown")
         else:
-            await update.message.reply_text("Khong lay duoc proxy free.")
+            await update.message.reply_text("Khong co proxy nao.")
     except Exception as e:
         logger.warning(f"Proxy cmd: {e}")
         await update.message.reply_text("Loi lay proxy.")
@@ -707,7 +745,6 @@ async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         params = urllib.parse.urlencode({"link": link, "key": API2_BYPASS_KEY})
         url = f"{API2_BYPASS_URL}?{params}"
         data = await fetch_json(url, headers={"User-Agent": "curl/8.0"}, timeout=15)
-        # Try to extract result from common response patterns
         result = data.get("result") or data.get("data") or data.get("url") or data.get("bypass") or json.dumps(data, ensure_ascii=False)
         msg = (
             f"🔓 **Kết quả Bypass:**\n\n"
@@ -715,10 +752,10 @@ async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, parse_mode="Markdown")
     except RateLimited:
-        await update.message.reply_text("⏳ API bypass đang bị giới hạn, thử lại sau.")
+        await update.message.reply_text("⏳ API bypass dang bi gioi han, thu lai sau.")
     except Exception as e:
         logger.debug(f"Bypass failed: {e}")
-        await update.message.reply_text("❌ Lỗi bypass link. Kiểm tra lại URL hoặc thử lại sau.")
+        await update.message.reply_text("❌ Loi bypass link. Kiem tra lai URL hoac thu lai sau.")
 
 
 @rate_limit(5)
@@ -1310,6 +1347,264 @@ async def lich_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Lỗi: {e}")
 
 
+# ══════════════════════════════════════════════════════════════
+#  🎵  TikTok Features
+# ══════════════════════════════════════════════════════════════
+TIKTOK_API = "https://www.tikwm.com/api/"
+
+
+@rate_limit(5)
+async def tiktok_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Download TikTok video không logo + hiển thị thông tin"""
+    url = " ".join(context.args) if context.args else ""
+    if not url:
+        await update.message.reply_text(
+            "🎵 **TikTok Downloader**\n\n"
+            "Dùng: `/tiktok <url>`\n\n"
+            "Ví dụ: `/tiktok https://www.tiktok.com/@user/video/1234567890`",
+            parse_mode="Markdown",
+        )
+        return
+    try:
+        api_url = f"{TIKTOK_API}?url={urllib.parse.quote(url)}"
+        data = await fetch_json(api_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        if data.get("code") != 0 or not data.get("data"):
+            await update.message.reply_text("❌ Không thể tải video. Kiểm tra lại URL.")
+            return
+        d = data["data"]
+        author = d.get("author", {}).get("unique_id", "N/A")
+        nickname = d.get("author", {}).get("nickname", "")
+        desc = d.get("title", "") or "Không có mô tả"
+        stats = d.get("stats", {})
+        plays = stats.get("play_count", 0)
+        likes = stats.get("digg_count", 0)
+        comments = stats.get("comment_count", 0)
+        shares = stats.get("share_count", 0)
+        video_url = d.get("play") or d.get("wmplay") or ""
+        if not video_url:
+            await update.message.reply_text("❌ Không tìm thấy video.")
+            return
+        caption = (
+            f"🎵 **TikTok Video**\n"
+            f"👤 **@{author}** {nickname}\n"
+            f"📝 {desc[:200]}{'...' if len(desc) > 200 else ''}\n\n"
+            f"❤️ {likes:,}  💬 {comments:,}  🔄 {shares:,}  👀 {plays:,}"
+        )
+        video_data = await fetch_bytes(video_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+        await update.message.reply_video(video=video_data, caption=caption, parse_mode="Markdown")
+    except RateLimited:
+        await update.message.reply_text("⏳ API đang bị giới hạn, thử lại sau.")
+    except Exception as e:
+        logger.debug(f"TikTok download failed: {e}")
+        await update.message.reply_text("❌ Lỗi tải TikTok.")
+
+
+
+
+
+
+@rate_limit(5)
+async def tiktok_profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem thông tin profile TikTok"""
+    username = " ".join(context.args) if context.args else ""
+    if not username:
+        await update.message.reply_text(
+            "὆4 **TikTok Profile**\n\n"
+            "Dùng: `/tiktok_profile <username>`\n\n"
+            "Ví dụ: `/tiktok_profile theanh28`",
+            parse_mode="Markdown",
+        )
+        return
+    username = username.replace("@", "").strip()
+    try:
+        api_url = f"{TIKTOK_API}user/?unique_id={urllib.parse.quote(username)}"
+        data = await fetch_json(api_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        if data.get("code") != 0 or not data.get("data"):
+            await update.message.reply_text(f"❌ Không tìm thấy user @{username}.")
+            return
+        d = data["data"]
+        user_info = d.get("user", {})
+        stats = d.get("stats", {})
+        nickname = user_info.get("nickname", "N/A")
+        unique_id = user_info.get("unique_id", username)
+        bio = user_info.get("signature", "") or "Không có bio"
+        avatar = user_info.get("avatar")
+        followers = stats.get("follower_count", 0)
+        following = stats.get("following_count", 0)
+        likes = stats.get("heart_count", 0)
+        videos = stats.get("video_count", 0)
+        msg = (
+            f"὆4 **{nickname}** (@{unique_id})\n\n"
+            f"📝 {bio[:300]}{'...' if len(bio) > 300 else ''}\n\n"
+            f"👥 **{followers:,}** followers\n"
+            f"📌 **{following:,}** following\n"
+            f"❤️ **{likes:,}** likes\n"
+            f"🎬 **{videos:,}** videos"
+        )
+        if avatar:
+            await update.message.reply_photo(photo=avatar, caption=msg, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(msg, parse_mode="Markdown")
+    except RateLimited:
+        await update.message.reply_text("⏳ API đang bị giới hạn, thử lại sau.")
+    except Exception as e:
+        logger.debug(f"TikTok profile failed: {e}")
+        await update.message.reply_text("❌ Lỗi lấy thông tin profile.")
+
+
+@rate_limit(5)
+async def tiktok_search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tìm kiếm video trên TikTok"""
+    keyword = " ".join(context.args) if context.args else ""
+    if not keyword:
+        await update.message.reply_text(
+            "🔎 **TikTok Search**\n\n"
+            "Dùng: `/tiktok_search <từ khóa>`\n\n"
+            "Ví dụ: `/tiktok_search mèo cute`",
+            parse_mode="Markdown",
+        )
+        return
+    try:
+        api_url = f"{TIKTOK_API}search/?keywords={urllib.parse.quote(keyword)}&count=5"
+        data = await fetch_json(api_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        if data.get("code") != 0 or not data.get("data"):
+            await update.message.reply_text(f"❌ Không tìm thấy kết quả cho '{keyword}'.")
+            return
+        videos = data["data"]
+        lines = [f"🔎 **Kết quả: {keyword}**\n"]
+        for i, v in enumerate(videos[:5], 1):
+            author = v.get("author", {}).get("unique_id", "N/A")
+            desc = v.get("title", "") or "Không có mô tả"
+            stats = v.get("stats", {})
+            likes = stats.get("digg_count", 0)
+            link = v.get("share_url", f"https://tiktok.com/@{author}")
+            lines.append(f"**{i}.** 👤 @{author}  ❤️ {likes:,}")
+            lines.append(f"   📝 {desc[:100]}")
+            lines.append(f"   🔗 [Xem video]({link})\n")
+        await update.message.reply_text(
+            "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True,
+        )
+    except RateLimited:
+        await update.message.reply_text("⏳ API đang bị giới hạn, thử lại sau.")
+    except Exception as e:
+        logger.debug(f"TikTok search failed: {e}")
+        await update.message.reply_text("❌ Lỗi tìm kiếm TikTok.")
+
+
+@rate_limit(5)
+async def tiktok_trending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem video thịnh hành trên TikTok"""
+    try:
+        api_url = f"{TIKTOK_API}feed/trending"
+        data = await fetch_json(api_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        if data.get("code") != 0 or not data.get("data"):
+            await update.message.reply_text("❌ Không thể lấy video thịnh hành.")
+            return
+        videos = data["data"].get("videos", [])
+        if not videos:
+            await update.message.reply_text("❌ Không có video trending.")
+            return
+        lines = ["🔥 **TikTok Trending Top 10**\n"]
+        for i, v in enumerate(videos[:10], 1):
+            author = v.get("author", {}).get("unique_id", "N/A")
+            desc = v.get("title", "") or "Không có mô tả"
+            stats = v.get("stats", {})
+            likes = stats.get("digg_count", 0)
+            plays = stats.get("play_count", 0)
+            lines.append(f"**{i}.** 👤 @{author}  👀 {plays:,}  ❤️ {likes:,}")
+            lines.append(f"   📝 {desc[:80]}\n")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    except RateLimited:
+        await update.message.reply_text("⏳ API đang bị giới hạn, thử lại sau.")
+    except Exception as e:
+        logger.debug(f"TikTok trending failed: {e}")
+        await update.message.reply_text("❌ Lỗi lấy video thịnh hành.")
+
+
+@rate_limit(3)
+async def tiktok_seo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gợi ý SEO cho TikTok (tiêu đề, hashtag, mô tả)"""
+    keyword = " ".join(context.args) if context.args else ""
+    if not keyword:
+        await update.message.reply_text(
+            "📈 **TikTok SEO Assistant**\n\n"
+            "Dùng: `/tiktok_seo <từ khóa>`\n\n"
+            "Bot sẽ gợi ý:\n"
+            "• Tiêu đề tối ưu\n"
+            "• Hashtag thịnh hành\n"
+            "• Mô tả video\n\n"
+            "Ví dụ: `/tiktok_seo cách nấu phở`",
+            parse_mode="Markdown",
+        )
+        return
+    kw = keyword.lower().strip()
+    titles = [
+        f"{keyword.title()} | Bạn đã biết chưa?",
+        f"Hướng dẫn {kw} đơn giản tại nhà",
+        f"{keyword.title()} siêu dễ, ai cũng làm được",
+        f"Bí quyết {kw} không phải ai cũng biết",
+        f"{keyword.title()} — Xem ngay kẻo lỡ!",
+    ]
+    words = kw.split()
+    base_tags = [kw.replace(" ", "")]
+    if len(words) > 1:
+        base_tags.extend(words)
+    hashtags = []
+    for t in base_tags:
+        hashtags.extend([f"#{t}", f"#{t}tiktok", f"#{t}xuhuong", f"hoc{t.replace(' ', '')}", f"#{t}moingay"])
+    hashtags.extend(["#fyp", "#foryou", "#xuhuong", "#tiktokvn", "#viral"])
+    hashtags = list(dict.fromkeys(hashtags))
+    tag_str = " ".join(hashtags[:15])
+    desc = (
+        f"📌 {keyword.title()} 🎯\n\n"
+        f"Bạn đã thử {kw} chưa? Xem ngay và học theo! 🔥\n\n"
+        f"👇 Đừng quên:\n"
+        f"✅ Like nếu hữu ích\n"
+        f"💬 Comment cảm nhận của bạn\n"
+        f"🔔 Lưu để xem sau\n\n"
+        f"{tag_str}"
+    )
+    msg = (
+        f"📈 **TikTok SEO — {keyword.title()}**\n\n"
+        f"**🎯 Tiêu đề gợi ý:**\n"
+        + "\n".join(f"{i+1}. {t}" for i, t in enumerate(titles))
+        + f"\n\n**🏷️ Hashtag gợi ý:**\n{tag_str}\n\n"
+        f"**📝 Mô tả gợi ý:**\n{desc[:800]}"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+@rate_limit(3)
+async def tiktok_hashtag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tra cứu hashtag TikTok + gợi ý hashtag liên quan"""
+    tag = " ".join(context.args) if context.args else ""
+    if not tag:
+        await update.message.reply_text(
+            "🏷️ **TikTok Hashtag**\n\n"
+            "Dùng: `/tiktok_hashtag <tag>`\n\n"
+            "Ví dụ: `/tiktok_hashtag hoc tap`",
+            parse_mode="Markdown",
+        )
+        return
+    tc = tag.replace("#", "").strip().lower()
+    related = [
+        f"#{tc}", f"#{tc}tiktok", f"#{tc}vn",
+        f"#{tc}challenge", f"#{tc}trend",
+        f"xuhuong{tc.replace(' ', '')}", f"hoc{tc.replace(' ', '')}",
+    ]
+    msg = (
+        f"🏷️ **Hashtag: #{tc}**\n\n"
+        f"**📊 Mẹo dùng hashtag hiệu quả:**\n"
+        f"• Dùng **3-5 hashtag** chính liên quan đến nội dung\n"
+        f"• Thêm **2-3 hashtag thịnh hành** (#fyp, #xuhuong)\n"
+        f"• Đặt hashtag ở **cuối mô tả** hoặc **comment đầu tiên**\n"
+        f"• Trộn hashtag lớn (nhiều view) và hashtag nhỏ (ít cạnh tranh)\n\n"
+        f"**🔗 Hashtag liên quan:**\n"
+        + "\n".join(f"• {h}" for h in related)
+        + f"\n\n**🔥 Hashtag thịnh hành hiện tại:**\n"
+        "#fyp #foryou #xuhuong #tiktokvn #viral #trending #learnontiktok"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
 # Maps menu "run_" buttons to their handlers (defined after all handlers exist)
 RUN_ACTIONS = {
     "ip": ip_cmd,
@@ -1350,6 +1645,12 @@ async def main():
         BotCommand("wiki", "Tra Wikipedia"),
         BotCommand("tygia", "Tỷ giá ngoại tệ"),
         BotCommand("bypass", "Bypass link rút gọn"),
+        BotCommand("tiktok", "Tai video TikTok"),
+        BotCommand("tiktok_profile", "Xem profile TikTok"),
+        BotCommand("tiktok_search", "Tim kiem TikTok"),
+        BotCommand("tiktok_trending", "Video thinh hanh"),
+        BotCommand("tiktok_seo", "Goi y SEO TikTok"),
+        BotCommand("tiktok_hashtag", "Tra hashtag TikTok"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -1385,6 +1686,12 @@ async def main():
     app.add_handler(CommandHandler("wiki", wiki_cmd))
     app.add_handler(CommandHandler("tygia", tygia_cmd))
     app.add_handler(CommandHandler("bypass", bypass_cmd))
+    app.add_handler(CommandHandler("tiktok", tiktok_cmd))
+    app.add_handler(CommandHandler("tiktok_profile", tiktok_profile_cmd))
+    app.add_handler(CommandHandler("tiktok_search", tiktok_search_cmd))
+    app.add_handler(CommandHandler("tiktok_trending", tiktok_trending_cmd))
+    app.add_handler(CommandHandler("tiktok_seo", tiktok_seo_cmd))
+    app.add_handler(CommandHandler("tiktok_hashtag", tiktok_hashtag_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
 
