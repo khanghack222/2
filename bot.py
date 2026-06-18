@@ -186,7 +186,7 @@ def rate_limit(seconds=3):
             now = time.monotonic()
             elapsed = now - _last_call.get(key, 0.0)
             if elapsed < seconds:
-                await update.message.reply_text(
+                await update.effective_message.reply_text(
                     f"⏳ Chậm thôi nào! Thử lại sau {int(seconds - elapsed) + 1}s."
                 )
                 return
@@ -209,45 +209,49 @@ def save_van_blacklist(data):
 
 # --- Interactive command menu (inline keyboard) ---
 MENU_SECTIONS = {
-    "tienich": ("🌤 Tiện ích",
-        "🌤 /weather <tp> — Thời tiết\n"
-        "🌐 /translate <vb> — Dịch sang Việt\n"
-        "🔗 /shorten <url> — Rút gọn link\n"
-        "📱 /qr <nd> — Tạo QR code\n"
-        "🌍 /ip — IP + vị trí\n"
-        "📸 /screenshot <url> — Chụp web"),
-    "congcu": ("🛠 Công cụ",
-        "🖼 /code <ext> — Ảnh code đẹp (vd: /code py)\n"
-        "🧮 /calc <bt> — Máy tính (/calc 2+2*pi)\n"
-        "🔐 /password <số> — Tạo mật khẩu\n"
-        "📋 /passwords — DS mật khẩu\n"
-        "✏️ /editpass <id> <mk> — Sửa pass\n"
-        "🗑 /delpass <id> — Xóa pass\n"
-        "🛰 /proxy — Random proxy"),
-    "giaitri": ("🎭 Giải trí",
-        "🎭 /joke — Câu chuyện vui\n"
-        "📺 /anime <tên> — Tra anime\n"
-        "😂 /meme — Meme ngẫu nhiên"),
-    "hoctap": ("📚 Học tập",
-        "📝 /van — Văn mẫu lớp 8\n"
-        "📖 /dictionary <từ> — Từ điển Anh\n"
-        "🔎 /wiki <từ khóa> — Wikipedia"),
-    "taichinh": ("💰 Tài chính",
-        "💰 /crypto — Giá crypto\n"
-        "💱 /tygia — Tỷ giá ngoại tệ → VND"),
-    "lich": ("📅 Lịch & Nhắc nhở",
-        "📅 /lich — Lịch âm hôm nay\n"
-        "📅 /lich 30/4/2026 — Xem ngày cụ thể\n"
-        "⏰ /remind <giây> <nd> — Đặt nhắc nhở\n"
-        "📋 /list — DS nhắc nhở\n"
-        "❌ /cancel <id> — Hủy nhắc nhở"),
-    "khac": ("ℹ️ Khác",
-        "ℹ️ /id — Thông tin của bạn\n"
-        "📊 /status — Trạng thái bot\n"
-        "❓ /help — Hướng dẫn chi tiết kèm ví dụ"),
+    "tienich": ("🌤  Tiện ích",
+        "`/weather`   — Xem thời tiết\n"
+        "`/translate` — Dịch văn bản → Tiếng Việt\n"
+        "`/shorten`   — Rút gọn đường link\n"
+        "`/qr`        — Tạo mã QR\n"
+        "`/ip`        — IP & vị trí của bạn\n"
+        "`/screenshot` — Chụp ảnh trang web"),
+    "congcu": ("🛠  Công cụ",
+        "`/code`      — Code → ảnh đẹp\n"
+        "`/calc`      — Máy tính (1+1, pi, sqrt)\n"
+        "`/password`  — Tạo & lưu mật khẩu\n"
+        "`/passwords` — DS mật khẩu đã lưu\n"
+        "`/editpass`  — Sửa mật khẩu\n"
+        "`/delpass`   — Xoá mật khẩu\n"
+        "`/proxy`     — Proxy miễn phí ngẫu nhiên"),
+    "giaitri": ("🎭  Giải trí",
+        "`/joke`      — Chuyện cười ngẫu nhiên\n"
+        "`/anime`     — Tra cứu anime\n"
+        "`/meme`      — Meme ngẫu nhiên từ Reddit"),
+    "hoctap": ("📚  Học tập",
+        "`/van`       — Văn mẫu lớp 8\n"
+        "`/dictionary` — Tra từ điển Anh-Việt\n"
+        "`/wiki`      — Tra Wikipedia"),
+    "taichinh": ("💰  Tài chính",
+        "`/crypto`    — Giá crypto (BTC, ETH…)\n"
+        "`/tygia`     — Tỷ giá ngoại tệ → VND"),
+    "lich": ("📅  Lịch & Nhắc nhở",
+        "`/lich`      — Lịch âm (hôm nay / ngày)\n"
+        "`/remind`    — Đặt nhắc nhở\n"
+        "`/list`      — DS nhắc nhở\n"
+        "`/cancel`    — Huỷ nhắc nhở"),
+    "khac": ("ℹ️  Hệ thống",
+        "`/id`        — Thông tin Telegram của bạn\n"
+        "`/status`    — Trạng thái & thời gian hoạt động\n"
+        "`/help`      — Hướng dẫn chi tiết"),
 }
 
-MENU_GREETING = "👋 **Chào bạn!** Mình là bot cá nhân. Chọn một nhóm lệnh bên dưới:"
+MENU_GREETING = (
+    "╭──────────────────────────────────────╮\n"
+    "│  🤖  **BOT TERMINAL**               │\n"
+    "│  › Gõ `/help` để xem hướng dẫn  │\n"
+    "╰──────────────────────────────────────╯\n\n"
+    "━━━ Chọn danh mục bên dưới ━━━")
 
 
 def main_menu_keyboard():
@@ -262,10 +266,24 @@ def main_menu_keyboard():
     return InlineKeyboardMarkup(rows)
 
 
-def section_keyboard():
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("⬅️ Quay lại menu", callback_data="menu_home")]]
-    )
+# No-arg commands runnable straight from a menu button
+SECTION_RUN = {
+    "tienich": [("🌍 IP của tôi", "ip")],
+    "giaitri": [("🎭 Joke", "joke"), ("😂 Meme", "meme")],
+    "taichinh": [("💰 Crypto", "crypto"), ("💱 Tỷ giá", "tygia")],
+}
+
+
+def section_keyboard(key=None):
+    rows = []
+    run_btns = [
+        InlineKeyboardButton(label, callback_data=f"run_{cmd}")
+        for label, cmd in SECTION_RUN.get(key, [])
+    ]
+    for i in range(0, len(run_btns), 2):  # 2 nút / hàng
+        rows.append(run_btns[i:i + 2])
+    rows.append([InlineKeyboardButton("⬅️ Quay lại menu", callback_data="menu_home")])
+    return InlineKeyboardMarkup(rows)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -277,52 +295,69 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    if q.data == "menu_home":
+    data = q.data
+    # Quick-run a no-arg command from a button
+    if data.startswith("run_"):
+        handler = RUN_ACTIONS.get(data.replace("run_", ""))
+        if handler:
+            context.args = []
+            await handler(update, context)
+        return
+    if data == "menu_home":
         await q.edit_message_text(
             MENU_GREETING, reply_markup=main_menu_keyboard(), parse_mode="Markdown"
         )
         return
-    section = MENU_SECTIONS.get(q.data.replace("menu_", ""))
+    key = data.replace("menu_", "")
+    section = MENU_SECTIONS.get(key)
     if section:
         title, body = section
         await q.edit_message_text(
-            f"**{title}**\n\n{body}", reply_markup=section_keyboard(), parse_mode="Markdown"
+            f"**{title}**\n\n{body}", reply_markup=section_keyboard(key), parse_mode="Markdown"
         )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "📌 **Ví dụ từng lệnh:**\n\n"
-        "🌤 `/weather hanoi` — Thời tiết Hà Nội\n"
-        "🌤 `/weather hanoi,vi` — Tiếng Việt\n\n"
-        "🌐 `/translate hello world` — Dịch sang Anh\n"
-        "🌐 `/translate xin chào|vi|en` — Dịch từ Việt sang Anh\n\n"
-        "🔗 `/shorten https://example.com` — Rút gọn link\n\n"
-        "📱 `/qr https://example.com` — Tạo QR code\n\n"
-        "💰 `/crypto` — Giá BTC, ETH, SOL\n\n"
-        "📸 `/screenshot https://example.com` — Chụp ảnh web\n\n"
-        "🧮 `/calc 2+2*pi` — Máy tính (pi, e, sqrt, abs, round)\n"
-        "🧮 `/calc 2**10` — Luỹ thừa\n"
-        "🧮 `/calc sqrt(144)+abs(-5)` — Hàm\n\n"
-        "🔐 `/password 16` — Tạo mật khẩu 16 ký tự\n"
-        "🔐 `/password 20 email` — Tạo + lưu với tên 'email'\n"
-        "🔐 `/passwords` — Xem mật khẩu đã lưu\n"
-        "🔐 `/editpass 1 mkmoi` — Sửa mật khẩu số 1\n"
-        "🔐 `/delpass 1` — Xóa mật khẩu số 1\n\n"
-        "📖 `/dictionary hello` — Tra từ 'hello'\n\n"
-        "🎭 `/joke` — Câu chuyện vui\n\n"
-        "📺 `/anime naruto` — Tra anime Naruto\n\n"
-        "😂 `/meme` — Meme ngẫu nhiên từ Reddit\n\n"
-        "📝 `/van` — Văn mẫu lớp 8 ngẫu nhiên\n\n"
-        "📅 `/lich` — Lịch âm hôm nay\n"
-        "📅 `/lich 30/4/2026` — Xem ngày cụ thể\n\n"
-        "⏰ `/remind 60 Mua sữa` — Nhắc sau 60 giây\n"
-        "⏰ `/list` — Danh sách nhắc nhở\n"
-        "⏰ `/cancel 1` — Hủy nhắc nhở số 1\n\n"
-        "ℹ️ `/id` — Thông tin của bạn\n"
-        "ℹ️ `/status` — Trạng thái bot\n"
-        "ℹ️ `/ip` — IP + vị trí hiện tại\n"
-        "ℹ️ `/proxy` — Random proxy miễn phí"
+        "━━━ **Ví dụ sử dụng** ━━━\n\n"
+        "**Thời tiết & Dịch thuật**\n"
+        "  `/weather hanoi`          — Thời tiết tại Hà Nội\n"
+        "  `/translate hello`        — Dịch sang tiếng Việt\n\n"
+        "**Web & Media**\n"
+        "  `/shorten https://…`      — Rút gọn đường link\n"
+        "  `/qr https://…`           — Tạo mã QR\n"
+        "  `/screenshot https://…`   — Chụp ảnh trang web\n\n"
+        "**Tài chính & Crypto**\n"
+        "  `/crypto`                 — Giá BTC, ETH, SOL\n"
+        "  `/tygia`                  — Tỷ giá ngoại tệ → VND\n\n"
+        "**Máy tính**\n"
+        "  `/calc 2+2*pi`            — Tính toán cơ bản\n"
+        "  `/calc sqrt(144)+abs(-5)` — Hàm toán học\n\n"
+        "**Mật khẩu**\n"
+        "  `/password 16`            — Tạo mật khẩu 16 ký tự\n"
+        "  `/password 20 email`      — Tạo + lưu với nhãn\n"
+        "  `/passwords`              — DS mật khẩu đã lưu\n"
+        "  `/editpass 1 newpass`     — Sửa mật khẩu số 1\n"
+        "  `/delpass 1`              — Xoá mật khẩu số 1\n\n"
+        "**Học tập**\n"
+        "  `/dictionary hello`       — Tra từ điển Anh-Việt\n"
+        "  `/wiki Vietnam`           — Tra Wikipedia\n"
+        "  `/van`                    — Văn mẫu lớp 8\n\n"
+        "**Giải trí**\n"
+        "  `/joke`                   — Chuyện cười ngẫu nhiên\n"
+        "  `/anime naruto`           — Tra cứu anime\n"
+        "  `/meme`                   — Meme ngẫu nhiên\n\n"
+        "**Lịch & Nhắc nhở**\n"
+        "  `/lich`                   — Lịch âm (hôm nay)\n"
+        "  `/lich 30/4/2026`         — Lịch âm (ngày cụ thể)\n"
+        "  `/remind 60 Buy milk`     — Đặt nhắc nhở 60 giây\n"
+        "  `/list`                   — DS nhắc nhở\n"
+        "  `/cancel 1`               — Huỷ nhắc nhở số 1\n\n"
+        "**Hệ thống**\n"
+        "  `/id`                     — Thông tin Telegram của bạn\n"
+        "  `/status`                 — Trạng thái & thời gian hoạt động\n"
+        "  `/ip`                     — IP & vị trí của bạn\n"
+        "  `/proxy`                  — Proxy miễn phí ngẫu nhiên"
     )
     await update.message.reply_text(msg)
 
@@ -525,7 +560,7 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cached = cache_get("ip", ttl=300)
     if cached:
-        await update.message.reply_text(cached)
+        await update.effective_message.reply_text(cached)
         return
     try:
         data = await fetch_json("http://ip-api.com/json/")
@@ -537,10 +572,10 @@ async def ip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Lat/Lon: {data.get('lat')}, {data.get('lon')}"
         )
         cache_set("ip", msg)
-        await update.message.reply_text(msg)
+        await update.effective_message.reply_text(msg)
     except Exception as e:
         logger.debug(f"IP lookup failed: {e}")
-        await update.message.reply_text("Lỗi lấy thông tin IP.")
+        await update.effective_message.reply_text("Lỗi lấy thông tin IP.")
 
 
 async def password_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -555,7 +590,7 @@ async def password_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if user_id not in passwords:
         passwords[user_id] = []
-    idx = len(passwords[user_id]) + 1
+    idx = max((p["id"] for p in passwords[user_id]), default=0) + 1
     label = " ".join(context.args[1:]) if len(context.args) > 1 else f"pass{idx}"
     # FIX: passwords stored in plaintext — for a personal bot this is acceptable,
     # but consider adding encryption for production use
@@ -907,7 +942,7 @@ async def qr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def crypto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cached = cache_get("crypto", ttl=60)
     if cached:
-        await update.message.reply_text(cached)
+        await update.effective_message.reply_text(cached)
         return
     try:
         url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,ripple&vs_currencies=usd&include_24hr_change=true"
@@ -920,12 +955,12 @@ async def crypto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"{coin.upper()}: ${price} ({arrow} {change:+.2f}%)")
         result = "\n".join(lines)
         cache_set("crypto", result)
-        await update.message.reply_text(result)
+        await update.effective_message.reply_text(result)
     except RateLimited:
-        await update.message.reply_text("⏳ API crypto đang bị giới hạn, thử lại sau ít phút.")
+        await update.effective_message.reply_text("⏳ API crypto đang bị giới hạn, thử lại sau ít phút.")
     except Exception as e:
         logger.debug(f"Crypto failed: {e}")
-        await update.message.reply_text("Lỗi lấy giá crypto.")
+        await update.effective_message.reply_text("Lỗi lấy giá crypto.")
 
 
 @rate_limit(3)
@@ -937,10 +972,10 @@ async def joke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         turl = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=vi&dt=t&q=" + urllib.parse.quote(text)
         tdata = await fetch_json(turl, headers={"User-Agent": "curl/8.0"})
         translated = "".join(part[0] for part in tdata[0]) if isinstance(tdata, list) and len(tdata) > 0 else str(tdata)
-        await update.message.reply_text(translated)
+        await update.effective_message.reply_text(translated)
     except Exception as e:
         logger.debug(f"Joke failed: {e}")
-        await update.message.reply_text("Lỗi lấy joke.")
+        await update.effective_message.reply_text("Lỗi lấy joke.")
 
 
 async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1089,20 +1124,20 @@ async def meme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = data[0]
         children = data.get("data", {}).get("children", [])
         if not children:
-            await update.message.reply_text("Không có meme.")
+            await update.effective_message.reply_text("Không có meme.")
             return
         post = children[0]["data"]
         img_url = post.get("url_overridden_by_dest") or post.get("url", "")
         title = post.get("title", "")
         if img_url and any(img_url.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif"]):
-            await update.message.reply_photo(photo=img_url, caption=title)
+            await update.effective_message.reply_photo(photo=img_url, caption=title)
         else:
-            await update.message.reply_text(f"{title}\n{img_url}")
+            await update.effective_message.reply_text(f"{title}\n{img_url}")
     except RateLimited:
-        await update.message.reply_text("⏳ Reddit đang bị giới hạn, thử lại sau.")
+        await update.effective_message.reply_text("⏳ Reddit đang bị giới hạn, thử lại sau.")
     except Exception as e:
         logger.debug(f"Meme failed: {e}")
-        await update.message.reply_text("Lỗi lấy meme.")
+        await update.effective_message.reply_text("Lỗi lấy meme.")
 
 
 @rate_limit(3)
@@ -1140,14 +1175,14 @@ async def wiki_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def tygia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cached = cache_get("tygia", ttl=600)
     if cached:
-        await update.message.reply_text(cached)
+        await update.effective_message.reply_text(cached)
         return
     try:
         data = await fetch_json("https://open.er-api.com/v6/latest/USD")
         rates = data.get("rates", {})
         vnd = rates.get("VND")
         if not vnd:
-            await update.message.reply_text("Lỗi lấy tỷ giá.")
+            await update.effective_message.reply_text("Lỗi lấy tỷ giá.")
             return
         # quy đổi 1 đơn vị ngoại tệ -> VND qua trung gian USD
         def to_vnd(code):
@@ -1165,10 +1200,10 @@ async def tygia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"\n🕒 Cập nhật: {updated} UTC")
         result = "\n".join(lines)
         cache_set("tygia", result)
-        await update.message.reply_text(result)
+        await update.effective_message.reply_text(result)
     except Exception as e:
         logger.debug(f"Tygia failed: {e}")
-        await update.message.reply_text("Lỗi lấy tỷ giá.")
+        await update.effective_message.reply_text("Lỗi lấy tỷ giá.")
 
 
 # --- Lịch âm Việt Nam ---
@@ -1225,6 +1260,16 @@ async def lich_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Lỗi: {e}")
 
 
+# Maps menu "run_" buttons to their handlers (defined after all handlers exist)
+RUN_ACTIONS = {
+    "ip": ip_cmd,
+    "joke": joke_cmd,
+    "meme": meme_cmd,
+    "crypto": crypto_cmd,
+    "tygia": tygia_cmd,
+}
+
+
 # FIX: consolidated main function with proper startup sequence
 async def main():
     app = Application.builder().token(TOKEN).build()
@@ -1259,7 +1304,7 @@ async def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu_"))
+    app.add_handler(CallbackQueryHandler(menu_handler, pattern="^(menu_|run_)"))
     app.add_handler(CommandHandler("remind", remind))
     app.add_handler(CommandHandler("list", list_reminders))
     app.add_handler(CommandHandler("cancel", cancel))
