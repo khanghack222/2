@@ -656,7 +656,6 @@ async def delpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sai cú pháp. VD: /delpass 1")
 
 
-@rate_limit(5)
 async def _fetch_free():
     urls = ["https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all", "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt"]
     proxies = []
