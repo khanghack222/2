@@ -41,6 +41,7 @@ PASSWORDS_FILE = "passwords.json"
 START_TIME = datetime.datetime.now()
 VAN_BLACKLIST_FILE = "van_blacklist.json"
 
+
 # FIX: safe JSON loading with corruption recovery
 def safe_json_load(path, fallback):
     try:
@@ -74,6 +75,11 @@ def _get_fernet():
     key = os.environ.get("PASS_KEY")
     if key:
         key = key.encode()
+        try:
+            Fernet(key)
+        except Exception:
+            logger.warning("PASS_KEY invalid; use Fernet.generate_key()")
+            raise
     elif os.path.exists(KEY_FILE):
         with open(KEY_FILE, "rb") as f:
             key = f.read()
@@ -159,6 +165,8 @@ async def fetch_json(url, headers=None, data=None, timeout=10):
 
 # --- Simple TTL cache to cut down on repeat API calls ---
 _cache = {}
+_cache_maxsize = 200
+_shutdown_event = None
 
 
 def cache_get(key, ttl):
@@ -300,7 +308,6 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("run_"):
         handler = RUN_ACTIONS.get(data.replace("run_", ""))
         if handler:
-            context.args = []
             await handler(update, context)
         return
     if data == "menu_home":
@@ -650,30 +657,34 @@ async def delpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @rate_limit(5)
+async def _fetch_free():
+    urls = ["https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all", "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt"]
+    proxies = []
+    for url in urls:
+        try:
+            data = await fetch_text(url)
+            proxies.extend([p.strip() for p in data.splitlines() if p.strip()])
+        except Exception: continue
+    return proxies
+
+
+@rate_limit(5)
 async def proxy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        urls = [
-            "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
-            "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
-        ]
-        proxies = []
-        for url in urls:
-            try:
-                data = await fetch_text(url)
-                proxies.extend([p.strip() for p in data.splitlines() if p.strip()])
-            except Exception as e:
-                logger.debug(f"Proxy source {url[:40]} failed: {e}")
-                continue
+        n = 1
+        if context.args:
+            try: n = max(1, min(20, int(context.args[0])))
+            except: pass
+        proxies = await _fetch_free()
         if proxies:
-            p = secrets.choice(proxies)  # FIX: use secrets instead of random for unbiased selection
-            await update.message.reply_text(f"Proxy ngẫu nhiên:\n`{p}`", parse_mode="Markdown")
+            picked = [secrets.choice(proxies) for _ in range(n)]
+            msg = f"Free proxy ({n} cai):\n" + "\n".join(f"`{p}`" for p in picked)
+            await update.message.reply_text(msg, parse_mode="Markdown")
         else:
-            await update.message.reply_text("Không lấy được proxy.")
+            await update.message.reply_text("Khong lay duoc proxy free.")
     except Exception as e:
-        logger.warning(f"Proxy command failed: {e}")
-        await update.message.reply_text("Lỗi lấy proxy.")
-
-
+        logger.warning(f"Proxy cmd: {e}")
+        await update.message.reply_text("Loi lay proxy.")
 @rate_limit(5)
 async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ext = context.args[0] if context.args else "py"
@@ -999,7 +1010,8 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_json(DATA_FILE, reminders)
     save_passwords(passwords)
     logger.info("Bot restart initiated by user %s", user_id)
-    sys.exit(0)
+    global _shutdown_event
+    _shutdown_event = True
 
 
 # FIX: replaced eval with a safe expression parser for calc_cmd
@@ -1238,6 +1250,8 @@ async def lich_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sol_month = dt.month
         if dt.day >= 20:
             sol_month += 1
+            if sol_month > 12:
+                sol_month = 1
         tiet_idx = ((sol_month - 1) % 12) // 3
         tiet = _TIET[tiet_idx]
 
@@ -1360,14 +1374,15 @@ async def main():
 
     # FIX: use an Event to allow graceful shutdown instead of while+sleep
     try:
-        while True:
-            await asyncio.sleep(3600)
+        while not _shutdown_event:
+            await asyncio.sleep(60)
+        logger.info("Shutdown received, stopping bot...")
     except asyncio.CancelledError:
         logger.info("Shutdown received, stopping bot...")
+    finally:
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
-        raise
 
 
 if __name__ == "__main__":
