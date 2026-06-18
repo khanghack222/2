@@ -1626,6 +1626,33 @@ async def tiktok_hashtag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
 _ai_history: dict = {}
 AI_HISTORY_LIMIT = 10
 
+# Auto-detect TikTok URLs in any message and reply with download
+tiktok_url_pattern = re.compile(r"(https?://(?:www\.)?tiktok\.com/@[\w.]+/video/\d+[^\s]*)", re.IGNORECASE)
+
+async def auto_tiktok_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Auto-detect TikTok URLs and reply with video info."""
+    text = update.message.text or ""
+    match = tiktok_url_pattern.search(text)
+    if not match or context.user_data.get("waiting_code"):
+        return  # Let echo handle it
+    url = match.group(1).strip()
+    try:
+        api_url = f"{TIKTOK_API}?url={urllib.parse.quote(url)}"
+        data = await fetch_json(api_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        if data.get("code") == 0 and data.get("data"):
+            d = data["data"]
+            author = d.get("author", {}).get("unique_id", "N/A")
+            desc = d.get("title", "") or "Không có mô tả"
+            stats = d.get("stats", {})
+            video_url = d.get("play") or d.get("wmplay") or ""
+            if video_url:
+                caption = f"🎵 **TikTok Video**\n\n\U0001f464 **@{author}**\n\n\U0001f4dd {desc[:200]}\n\n\u2764 {stats.get('digg_count',0):,}  \U0001f440 {stats.get('play_count',0):,}"
+                vd = await fetch_bytes(video_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+                await update.message.reply_video(video=vd, caption=caption, parse_mode="Markdown")
+                return
+    except Exception:
+        pass
+
 @rate_limit(5)
 async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = " ".join(context.args) if context.args else ""
@@ -1801,6 +1828,7 @@ async def main():
     app.add_handler(CommandHandler("ask", ask_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("myusage", myusage_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_tiktok_reply), group=0)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
 
