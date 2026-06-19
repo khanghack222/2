@@ -17,7 +17,7 @@ AI_MODEL = os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
 # 9Router on HF Spaces — OpenCode Free (miễn phí không giới hạn)
 ROUTER_API_KEY = os.environ.get(
     "ROUTER_API_KEY",
-    "",  # để trống nếu 9Router ko yêu cầu key
+    "sk-e4eeda3c27c1138d-t2fk64-45c4a4bc",
 )
 ROUTER_BASE_URL = os.environ.get(
     "ROUTER_BASE_URL",
