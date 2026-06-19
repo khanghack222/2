@@ -17,7 +17,7 @@ AI_MODEL = os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
 # 9Router on HF Spaces — OpenCode Free (miễn phí không giới hạn)
 ROUTER_API_KEY = os.environ.get(
     "ROUTER_API_KEY",
-    "sk-ec4f76a26156a7aa-05jsvk-3175f2d8",
+    "",  # để trống nếu 9Router ko yêu cầu key
 )
 ROUTER_BASE_URL = os.environ.get(
     "ROUTER_BASE_URL",
@@ -39,8 +39,8 @@ async def ask_ai(question: str) -> str:
 
     Priority: 9Router (OpenCode Free) → Groq → OpenAI
     """
-    # 1. 9Router / OpenCode Free (miễn phí)
-    if ROUTER_API_KEY:
+    # 1. 9Router / OpenCode Free (miễn phí) — luôn thử trước
+    if ROUTER_BASE_URL:
         return await _ask_router(question)
     # 2. Groq (miễn phí)
     elif GROQ_API_KEY:
@@ -61,6 +61,10 @@ async def ask_ai(question: str) -> str:
 async def _ask_router(question: str) -> str:
     """Use 9Router (OpenCode Free / Kiro / any model)."""
     try:
+        headers = {"Content-Type": "application/json"}
+        if ROUTER_API_KEY:
+            headers["Authorization"] = f"Bearer {ROUTER_API_KEY}"
+
         body = json.dumps({
             "model": ROUTER_MODEL,
             "messages": [
@@ -74,10 +78,7 @@ async def _ask_router(question: str) -> str:
         req = urllib.request.Request(
             f"{ROUTER_BASE_URL}/chat/completions",
             data=body,
-            headers={
-                "Authorization": f"Bearer {ROUTER_API_KEY}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
 
         def _call():
@@ -86,6 +87,12 @@ async def _ask_router(question: str) -> str:
 
         data = await asyncio.to_thread(_call)
         return data["choices"][0]["message"]["content"].strip()
+    except urllib.error.HTTPError as e:
+        logger.error(f"Router HTTP error {e.code}: {e}")
+        # Fallback: nếu 401 (key ko đúng), thử Groq
+        if e.code == 401 and GROQ_API_KEY:
+            return await _ask_groq(question)
+        return f"❌ Lỗi AI (9Router): HTTP {e.code}"
     except Exception as e:
         logger.error(f"Router API error: {e}")
         return f"❌ Lỗi AI (9Router): {e}"
