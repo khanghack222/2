@@ -16,6 +16,9 @@ import html as html_mod
 import sys
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+import database as db
+from dashboard import setup_routes as setup_dashboard
+from ai_chat import ask_ai
 
 # FIX: consolidated logging config, added rotation-friendly format
 logging.basicConfig(
@@ -261,6 +264,9 @@ MENU_SECTIONS = {
         "`/remind`    — Đặt nhắc nhở\n"
         "`/list`      — DS nhắc nhở\n"
         "`/cancel`    — Huỷ nhắc nhở"),
+    "ai": ("🤖  AI Chatbot",
+        "`/ask <câu hỏi>`    — Hỏi AI ChatGPT/Claude\n"
+        "`/ask reset`        — Xoá lịch sử chat"),
     "tiktok": ("🎵  TikTok",
         "`/tiktok <url>`      — Tải video không logo\n"
         "`/tiktok_profile <u>` — Xem profile\n"
@@ -268,6 +274,9 @@ MENU_SECTIONS = {
         "`/tiktok_trending`   — Video thịnh hành\n"
         "`/tiktok_seo <kw>`   — Gợi ý SEO\n"
         "`/tiktok_hashtag <t>` — Tra hashtag"),
+    "stats": ("📊  Thống kê",
+        "`/stats`      — Xem thống kê sử dụng\n"
+        "`/myusage`    — Xem lịch sử của bạn"),
     "khac": ("ℹ️  Hệ thống",
         "`/id`        — Thông tin Telegram của bạn\n"
         "`/status`    — Trạng thái & thời gian hoạt động\n"
@@ -386,6 +395,12 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/status`                 — Trạng thái & thời gian hoạt động\n"
         "  `/ip`                     — IP & vị trí của bạn\n"
         "  `/proxy`                  — Proxy miễn phí ngẫu nhiên\n\n"
+        "**AI Chatbot**\n"
+        "  `/ask <câu hỏi>`         — Hỏi AI (Groq/OpenAI free)\n"
+        "  `/ask reset`             — Xoá lịch sử chat\n\n"
+        "**Thống kê**\n"
+        "  `/stats`                 — Xem thống kê sử dụng\n"
+        "  `/myusage`               — Xem lịch sử của bạn\n\n"
         "**TikTok**\n"
         "  `/tiktok <url>`              — Tải video không logo\n"
         "  `/tiktok_profile <username>` — Xem profile TikTok\n"
@@ -1605,6 +1620,216 @@ async def tiktok_hashtag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "#fyp #foryou #xuhuong #tiktokvn #viral #trending #learnontiktok"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+# ═══ AI Chatbot ═══
+_ai_history: dict = {}
+AI_HISTORY_LIMIT = 10
+
+# Auto-detect TikTok URLs in any message and reply with download
+tiktok_url_pattern = re.compile(r"(https?://(?:www\.)?tiktok\.com/@[\w.]+/video/\d+[^\s]*)", re.IGNORECASE)
+
+async def auto_tiktok_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Auto-detect TikTok URLs and reply with video info."""
+    text = update.message.text or ""
+    match = tiktok_url_pattern.search(text)
+    if not match or context.user_data.get("waiting_code"):
+        return  # Let echo handle it
+    url = match.group(1).strip()
+    try:
+        api_url = f"{TIKTOK_API}?url={urllib.parse.quote(url)}"
+        data = await fetch_json(api_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        if data.get("code") == 0 and data.get("data"):
+            d = data["data"]
+            author = d.get("author", {}).get("unique_id", "N/A")
+            desc = d.get("title", "") or "Không có mô tả"
+            stats = d.get("stats", {})
+            video_url = d.get("play") or d.get("wmplay") or ""
+            if video_url:
+                caption = f"🎵 **TikTok Video**\n\n\U0001f464 **@{author}**\n\n\U0001f4dd {desc[:200]}\n\n\u2764 {stats.get('digg_count',0):,}  \U0001f440 {stats.get('play_count',0):,}"
+                vd = await fetch_bytes(video_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+                await update.message.reply_video(video=vd, caption=caption, parse_mode="Markdown")
+                return
+    except Exception:
+        pass
+
+@rate_limit(5)
+async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = " ".join(context.args) if context.args else ""
+    if not query:
+        await update.message.reply_text(
+            "🤖 **AI Chatbot**\n\n"
+            "Dùng: `/ask <câu hỏi>`\n"
+            "Ví dụ: `/ask Python là gì?`\n\n"
+            "`/ask reset` — Xoá lịch sử chat",
+            parse_mode="Markdown",
+        )
+        return
+    if query.lower() in ("reset", "clear", "xoa", "xo"):
+        user_id = update.effective_user.id
+        _ai_history.pop(user_id, None)
+        await update.message.reply_text("✅ Đã xoá lịch sử chat.")
+        return
+    user_id = update.effective_user.id
+    if user_id not in _ai_history:
+        _ai_history[user_id] = []
+    _ai_history[user_id].append({"role": "user", "content": query})
+    if len(_ai_history[user_id]) > AI_HISTORY_LIMIT:
+        _ai_history[user_id] = _ai_history[user_id][-AI_HISTORY_LIMIT:]
+    await update.message.reply_text("🔄 Đang suy nghị...")
+    try:
+        answer = await ask_ai(query)
+        _ai_history[user_id].append({"role": "assistant", "content": answer})
+        if len(answer) > 4000:
+            answer = answer[:4000] + "..."
+        await update.message.reply_text(answer)
+    except Exception as e:
+        logger.debug(f"AI failed: {e}")
+        await update.message.reply_text(f"❌ Lỗi AI: {e}")
+
+
+# ═══ Stats Commands ═══
+@rate_limit(5)
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        s = await db.get_stats_summary()
+        top = "\n".join(
+            f"  {i+1}. `{r['command']}` — {r['cnt']}"
+            for i, r in enumerate(s["top_cmds"][:5])
+        ) or "  Chà chơ..."
+        msg = (
+            f"📊 **Thống kê sử dụng**\n\n"
+            f"📥 **Tổng lệnh:** {s['total_cmds']}\n"
+            f"📅 **Hôm nay:** {s['today_cmds']}\n"
+            f"👥 **Tổng người dùng:** {s['total_users']}\n"
+            f"🔔 **Nhắc nhở:** {s['total_reminders']}\n"
+            f"🔐 **Mật khẩu:** {s['total_passwords']}\n\n"
+            f"🏆 **Top lệnh:**\n{top}"
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.debug(f"Stats failed: {e}")
+        await update.message.reply_text("❌ Lỗi lấy thống kê.")
+
+
+@rate_limit(5)
+async def myusage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        uid = update.effective_user.id
+        _db = await db.get_db()
+        cur = await _db.execute(
+            "SELECT command, COUNT(*) as cnt FROM stats_cmds WHERE user_id=? GROUP BY command ORDER BY cnt DESC LIMIT 10",
+            (uid,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+        if not rows:
+            await update.message.reply_text("Bạn chưa dùng lệnh nào.")
+            return
+        lines = "\n".join(f"  `{r['command']}` — {r['cnt']}" for r in rows)
+        msg = (
+            f"📊 **Lịch sử của bạn** (@{update.effective_user.username or 'N/A'})\n\n"
+            f"{lines}"
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.debug(f"My usage failed: {e}")
+        await update.message.reply_text("❌ Lỗi lấy thông tin.")
+
+
+# ═══ TikTok Auto-Post ═══
+# {chat_id: {"task": asyncio.Task, "interval": minutes, "running": True}}
+_tiktok_auto_tasks: dict = {}
+TikTok_API = TIKTOK_API  # re-use existing
+
+async def _tiktok_auto_worker(bot, chat_id: int, interval: int):
+    """Post trending TikTok videos to chat periodically."""
+    import asyncio
+    while True:
+        try:
+            api_url = f"{TIKTOK_API}feed/trending"
+            data = await fetch_json(api_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+            if data.get("code") == 0 and data.get("data"):
+                videos = data["data"].get("videos", [])
+                if videos:
+                    # Pick 1-3 random trending videos
+                    import random as _rand
+                    chosen = _rand.sample(videos[:10], min(3, len(videos[:10])))
+                    for v in chosen:
+                        author = v.get("author", {}).get("unique_id", "N/A")
+                        desc = v.get("title", "") or "No description"
+                        stats = v.get("stats", {})
+                        video_url = v.get("play") or v.get("wmplay") or ""
+                        if video_url:
+                            caption = (
+                                f"🔥 **TikTok Trending**\n\n"
+                                f"👤 **@{author}**\n"
+                                f"📝 {desc[:200]}\n\n"
+                                f"❤ {stats.get('digg_count',0):,}  "
+                                f"👀 {stats.get('play_count',0):,}"
+                            )
+                            try:
+                                vd = await fetch_bytes(video_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+                                await bot.send_video(chat_id=chat_id, video=vd, caption=caption, parse_mode="Markdown")
+                                await asyncio.sleep(5)  # avoid flood
+                            except Exception as e:
+                                logger.debug(f"Auto-post video failed: {e}")
+        except Exception as e:
+            logger.debug(f"TikTok auto-post error: {e}")
+        await asyncio.sleep(interval * 60)
+
+
+@rate_limit(10)
+async def tiktok_auto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start auto-posting trending TikTok to a chat."""
+    if not ADMIN_ID or update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Only admin can use this.")
+        return
+    try:
+        interval = int(context.args[0]) if context.args else 30
+        chat_id_str = context.args[1] if len(context.args) > 1 else None
+        if chat_id_str:
+            chat_id = int(chat_id_str)
+        else:
+            chat_id = update.effective_chat.id
+        interval = max(10, min(1440, interval))  # 10min to 24h
+        # Stop existing task if any
+        if chat_id in _tiktok_auto_tasks:
+            _tiktok_auto_tasks[chat_id]["task"].cancel()
+        task = asyncio.create_task(_tiktok_auto_worker(context.application.bot, chat_id, interval))
+        _tiktok_auto_tasks[chat_id] = {"task": task, "interval": interval, "running": True}
+        await update.message.reply_text(
+                                f"🔥 **Auto TikTok Trending ON**\n\n"
+                                f"Chat: `{chat_id}`\n"
+                                f"Interval: {interval} phút\n"
+                                f"Mỗi {interval}p sẽ gửi 1-3 video trending.\n\n"
+            f"`/tiktok_stop` — Tạm dừng",
+            parse_mode="Markdown"
+        )
+    except (IndexError, ValueError):
+        await update.message.reply_text(
+                                "Sai cú pháp:\n"
+                                "`/tiktok_auto` — Bật (30 phút, chat hiện tại)\n"
+                                "`/tiktok_auto 15` — Mỗi 15 phút\n"
+            "`/tiktok_auto 30 -1001234` — Gửi vào chat ID",
+            parse_mode="Markdown"
+        )
+
+
+@rate_limit(5)
+async def tiktok_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop auto-posting TikTok."""
+    if not ADMIN_ID or update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Only admin can use this.")
+        return
+    chat_id = update.effective_chat.id
+    if chat_id in _tiktok_auto_tasks:
+        _tiktok_auto_tasks[chat_id]["task"].cancel()
+        del _tiktok_auto_tasks[chat_id]
+        await update.message.reply_text("✅ Đã tạm dừng auto TikTok.")
+    else:
+        await update.message.reply_text("ℹ️ Chưa bật auto TikTok cho chat này.")
+
+
 # Maps menu "run_" buttons to their handlers (defined after all handlers exist)
 RUN_ACTIONS = {
     "ip": ip_cmd,
@@ -1651,6 +1876,9 @@ async def main():
         BotCommand("tiktok_trending", "Video thinh hanh"),
         BotCommand("tiktok_seo", "Goi y SEO TikTok"),
         BotCommand("tiktok_hashtag", "Tra hashtag TikTok"),
+        BotCommand("ask", "Hỏi AI Chatbot"),
+        BotCommand("stats", "Thống kê sử dụng"),
+        BotCommand("myusage", "Lịch sử của bạn"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -1692,8 +1920,28 @@ async def main():
     app.add_handler(CommandHandler("tiktok_trending", tiktok_trending_cmd))
     app.add_handler(CommandHandler("tiktok_seo", tiktok_seo_cmd))
     app.add_handler(CommandHandler("tiktok_hashtag", tiktok_hashtag_cmd))
+    app.add_handler(CommandHandler("ask", ask_cmd))
+    app.add_handler(CommandHandler("tiktok_auto", tiktok_auto_cmd))
+    app.add_handler(CommandHandler("tiktok_stop", tiktok_stop_cmd))
+    app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CommandHandler("myusage", myusage_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_tiktok_reply), group=0)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
+
+    # Stats middleware: log every command
+    async def stats_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message and update.message.text and update.message.text.startswith("/"):
+            cmd = update.message.text.split()[0].split("@")[0].strip("/")
+            user = update.effective_user
+            try:
+                await db.log_command(user.id if user else None, user.username if user else None, cmd)
+            except Exception:
+                pass
+    app.add_handler(MessageHandler(filters.Regex("^/"), stats_middleware), group=99)
+
+    # Initialize database
+    await db.get_db()
 
     PORT = int(os.environ.get("PORT", 10000))
     from aiohttp import web
@@ -1702,12 +1950,13 @@ async def main():
         return web.Response(text="OK")
 
     web_app = web.Application()
-    web_app.router.add_get("/", handle)
+    setup_dashboard(web_app)
+    web_app.router.add_get("/health", handle)
     runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info("Health server started on port %d", PORT)
+    logger.info("Dashboard + Health server started on port %d", PORT)
 
     logger.info("Bot started")
     await app.initialize()
