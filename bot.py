@@ -1735,6 +1735,101 @@ async def myusage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.debug(f"My usage failed: {e}")
         await update.message.reply_text("❌ Lỗi lấy thông tin.")
 
+
+# ═══ TikTok Auto-Post ═══
+# {chat_id: {"task": asyncio.Task, "interval": minutes, "running": True}}
+_tiktok_auto_tasks: dict = {}
+TikTok_API = TIKTOK_API  # re-use existing
+
+async def _tiktok_auto_worker(bot, chat_id: int, interval: int):
+    """Post trending TikTok videos to chat periodically."""
+    import asyncio
+    while True:
+        try:
+            api_url = f"{TIKTOK_API}feed/trending"
+            data = await fetch_json(api_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+            if data.get("code") == 0 and data.get("data"):
+                videos = data["data"].get("videos", [])
+                if videos:
+                    # Pick 1-3 random trending videos
+                    import random as _rand
+                    chosen = _rand.sample(videos[:10], min(3, len(videos[:10])))
+                    for v in chosen:
+                        author = v.get("author", {}).get("unique_id", "N/A")
+                        desc = v.get("title", "") or "No description"
+                        stats = v.get("stats", {})
+                        video_url = v.get("play") or v.get("wmplay") or ""
+                        if video_url:
+                            caption = (
+                                f"🔥 **TikTok Trending**\n\n"
+                                f"👤 **@{author}**\n"
+                                f"📝 {desc[:200]}\n\n"
+                                f"❤ {stats.get('digg_count',0):,}  "
+                                f"👀 {stats.get('play_count',0):,}"
+                            )
+                            try:
+                                vd = await fetch_bytes(video_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+                                await bot.send_video(chat_id=chat_id, video=vd, caption=caption, parse_mode="Markdown")
+                                await asyncio.sleep(5)  # avoid flood
+                            except Exception as e:
+                                logger.debug(f"Auto-post video failed: {e}")
+        except Exception as e:
+            logger.debug(f"TikTok auto-post error: {e}")
+        await asyncio.sleep(interval * 60)
+
+
+@rate_limit(10)
+async def tiktok_auto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start auto-posting trending TikTok to a chat."""
+    if not ADMIN_ID or update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Only admin can use this.")
+        return
+    try:
+        interval = int(context.args[0]) if context.args else 30
+        chat_id_str = context.args[1] if len(context.args) > 1 else None
+        if chat_id_str:
+            chat_id = int(chat_id_str)
+        else:
+            chat_id = update.effective_chat.id
+        interval = max(10, min(1440, interval))  # 10min to 24h
+        # Stop existing task if any
+        if chat_id in _tiktok_auto_tasks:
+            _tiktok_auto_tasks[chat_id]["task"].cancel()
+        task = asyncio.create_task(_tiktok_auto_worker(context.application.bot, chat_id, interval))
+        _tiktok_auto_tasks[chat_id] = {"task": task, "interval": interval, "running": True}
+        await update.message.reply_text(
+                                f"🔥 **Auto TikTok Trending ON**\n\n"
+                                f"Chat: `{chat_id}`\n"
+                                f"Interval: {interval} phút\n"
+                                f"Mỗi {interval}p sẽ gửi 1-3 video trending.\n\n"
+            f"`/tiktok_stop` — Tạm dừng",
+            parse_mode="Markdown"
+        )
+    except (IndexError, ValueError):
+        await update.message.reply_text(
+                                "Sai cú pháp:\n"
+                                "`/tiktok_auto` — Bật (30 phút, chat hiện tại)\n"
+                                "`/tiktok_auto 15` — Mỗi 15 phút\n"
+            "`/tiktok_auto 30 -1001234` — Gửi vào chat ID",
+            parse_mode="Markdown"
+        )
+
+
+@rate_limit(5)
+async def tiktok_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop auto-posting TikTok."""
+    if not ADMIN_ID or update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Only admin can use this.")
+        return
+    chat_id = update.effective_chat.id
+    if chat_id in _tiktok_auto_tasks:
+        _tiktok_auto_tasks[chat_id]["task"].cancel()
+        del _tiktok_auto_tasks[chat_id]
+        await update.message.reply_text("✅ Đã tạm dừng auto TikTok.")
+    else:
+        await update.message.reply_text("ℹ️ Chưa bật auto TikTok cho chat này.")
+
+
 # Maps menu "run_" buttons to their handlers (defined after all handlers exist)
 RUN_ACTIONS = {
     "ip": ip_cmd,
@@ -1826,6 +1921,8 @@ async def main():
     app.add_handler(CommandHandler("tiktok_seo", tiktok_seo_cmd))
     app.add_handler(CommandHandler("tiktok_hashtag", tiktok_hashtag_cmd))
     app.add_handler(CommandHandler("ask", ask_cmd))
+    app.add_handler(CommandHandler("tiktok_auto", tiktok_auto_cmd))
+    app.add_handler(CommandHandler("tiktok_stop", tiktok_stop_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("myusage", myusage_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_tiktok_reply), group=0)

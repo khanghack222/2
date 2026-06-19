@@ -1,0 +1,89 @@
+# =============================================================================
+#  docker-compose.yml — Bot Telegram All-in-One
+# =============================================================================
+#  Usage:
+#    Dev (hot-reload):  docker compose up dev
+#    Prod:              docker compose up prod --build
+#    Prod (detached):   docker compose up -d prod --build
+#    Stop:              docker compose down
+#    Logs:              docker compose logs -f prod
+#    Rebuild cache:     docker compose build --no-cache prod
+# =============================================================================
+
+services:
+  # ─── Development (hot-reload via volume mount) ─────────────────────────────
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bot-dev
+    ports:
+      - "${PORT:-10000}:10000"
+    env_file:
+      - .env
+    environment:
+      - PORT=10000
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - .:/app                     # Live reload
+      - ./data:/app/data           # Persist data between restarts
+      - bot-cache:/app/__pycache__ # Cache Python bytecode
+    command: python -u bot.py
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:10000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Production (optimized, non-root, no hot-reload) ────────────────────────
+  prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: bot-prod
+    ports:
+      - "${PORT:-10000}:10000"
+    env_file:
+      - .env
+    environment:
+      - PORT=10000
+      - DATA_DIR=/app/data
+    volumes:
+      - bot-data:/app/data         # Named volume for data persistence
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:10000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    depends_on:
+      dev:
+        condition: service_stopped  # Don't run both simultaneously
+
+volumes:
+  bot-data:
+    driver: local
+  bot-cache:
+    driver: local

@@ -1,0 +1,75 @@
+# =============================================================================
+#  .dockerignore — Exclude files from Docker build context
+# =============================================================================
+
+# Git
+.git
+.gitignore
+.git/objects
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Secrets (NEVER ship to image!)
+pass.key
+*.enc
+*.key
+.env
+secrets/
+
+# Test & dev
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+
+# Data files (should come from volume mount, not baked into image)
+*.json
+*.db
+*.sqlite3
+data/
+bot.db
+
+# IDE & editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Bot-specific temp files
+passwords.enc
+reminders.json
+passwords.json
+van_blacklist.json
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+Makefile
+Dockerfile
+docker-compose.yml
+docker-compose.override.yml
+
+# Documentation (not needed in image)
+*.md
+LICENSE
+docs/

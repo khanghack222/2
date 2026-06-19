@@ -9,10 +9,25 @@ import urllib.error
 
 logger = logging.getLogger(__name__)
 
-# Support multiple providers via env vars
+# ─── Config ──────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")  # Free LLM API
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 AI_MODEL = os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
+
+# 9Router on HF Spaces — OpenCode Free (miễn phí không giới hạn)
+ROUTER_API_KEY = os.environ.get(
+    "ROUTER_API_KEY",
+    "sk-ec4f76a26156a7aa-05jsvk-3175f2d8",
+)
+ROUTER_BASE_URL = os.environ.get(
+    "ROUTER_BASE_URL",
+    "https://kieuxuan257-bot-terminal.hf.space/v1",
+)
+ROUTER_MODEL = os.environ.get(
+    "ROUTER_MODEL",
+    "oc/qwen3.6-plus-free",
+)
+
 SYSTEM_PROMPT = (
     "Bạn là trợ lý AI thân thiện, trả lời bằng tiếng Việt. "
     "Ngắn gọn, rõ ràng, hữu ích."
@@ -20,18 +35,60 @@ SYSTEM_PROMPT = (
 
 
 async def ask_ai(question: str) -> str:
-    """Send question to the best available LLM provider."""
-    if GROQ_API_KEY:
+    """Send question to the best available LLM provider.
+
+    Priority: 9Router (OpenCode Free) → Groq → OpenAI
+    """
+    # 1. 9Router / OpenCode Free (miễn phí)
+    if ROUTER_API_KEY:
+        return await _ask_router(question)
+    # 2. Groq (miễn phí)
+    elif GROQ_API_KEY:
         return await _ask_groq(question)
+    # 3. OpenAI (trả phí)
     elif OPENAI_API_KEY:
         return await _ask_openai(question)
     else:
         return (
             "❌ Chưa cấu hình AI API key.\n\n"
             "Set env var:\n"
+            "• `ROUTER_API_KEY` (miễn phí): 9Router + OpenCode Free\n"
             "• `GROQ_API_KEY` (miễn phí): https://console.groq.com\n"
             "• `OPENAI_API_KEY` (trả phí): https://platform.openai.com"
         )
+
+
+async def _ask_router(question: str) -> str:
+    """Use 9Router (OpenCode Free / Kiro / any model)."""
+    try:
+        body = json.dumps({
+            "model": ROUTER_MODEL,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": question},
+            ],
+            "max_tokens": 1024,
+            "temperature": 0.7,
+        }).encode()
+
+        req = urllib.request.Request(
+            f"{ROUTER_BASE_URL}/chat/completions",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {ROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
+
+        def _call():
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read().decode())
+
+        data = await asyncio.to_thread(_call)
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logger.error(f"Router API error: {e}")
+        return f"❌ Lỗi AI (9Router): {e}"
 
 
 async def _ask_groq(question: str) -> str:
