@@ -14,6 +14,7 @@ import string
 import random
 import html as html_mod
 import sys
+import lunardate
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 import database as db
@@ -44,7 +45,6 @@ API2_BYPASS_URL = "http://fi5.bot-hosting.net:22301/bypass"
 API2_BYPASS_KEY = "thi-thi"
 PASSWORDS_FILE = "passwords.json"
 START_TIME = datetime.datetime.now()
-VAN_BLACKLIST_FILE = "van_blacklist.json"
 VAN_BLACKLIST_FILE = "van_blacklist.json"
 
 # Proxy list: paste proxy của bạn vào đây, mỗi dòng 1 cái
@@ -1314,7 +1314,6 @@ _THU = ['Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ
 
 async def lich_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        import lunardate
         now = datetime.datetime.now()
         d = context.args[0] if context.args else None
         if d:
@@ -1676,16 +1675,16 @@ async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _ai_history[user_id].append({"role": "user", "content": query})
     if len(_ai_history[user_id]) > AI_HISTORY_LIMIT:
         _ai_history[user_id] = _ai_history[user_id][-AI_HISTORY_LIMIT:]
-    await update.message.reply_text("🔄 Đang suy nghị...")
+    thinking_msg = await update.message.reply_text("🔄 Đang suy nghĩ...")
     try:
         answer = await ask_ai(query)
         _ai_history[user_id].append({"role": "assistant", "content": answer})
         if len(answer) > 4000:
             answer = answer[:4000] + "..."
-        await update.message.reply_text(answer)
+        await thinking_msg.edit_text(answer)
     except Exception as e:
         logger.debug(f"AI failed: {e}")
-        await update.message.reply_text(f"❌ Lỗi AI: {e}")
+        await thinking_msg.edit_text(f"❌ Lỗi AI: {e}")
 
 
 # ═══ Stats Commands ═══
@@ -1739,7 +1738,6 @@ async def myusage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ═══ TikTok Auto-Post ═══
 # {chat_id: {"task": asyncio.Task, "interval": minutes, "running": True}}
 _tiktok_auto_tasks: dict = {}
-TikTok_API = TIKTOK_API  # re-use existing
 
 async def _tiktok_auto_worker(bot, chat_id: int, interval: int):
     """Post trending TikTok videos to chat periodically."""
@@ -1752,8 +1750,7 @@ async def _tiktok_auto_worker(bot, chat_id: int, interval: int):
                 videos = data["data"].get("videos", [])
                 if videos:
                     # Pick 1-3 random trending videos
-                    import random as _rand
-                    chosen = _rand.sample(videos[:10], min(3, len(videos[:10])))
+                    chosen = random.sample(videos[:10], min(3, len(videos[:10])))
                     for v in chosen:
                         author = v.get("author", {}).get("unique_id", "N/A")
                         desc = v.get("title", "") or "No description"
@@ -1977,6 +1974,8 @@ async def main():
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
+        if 'runner' in locals():
+            await runner.cleanup()
 
 
 if __name__ == "__main__":
