@@ -14,18 +14,18 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 AI_MODEL = os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
 
-# 9Router on HF Spaces — OpenCode Free (miễn phí không giới hạn)
+# 9Router on Render — OpenCode Free (miễn phí không giới hạn)
 ROUTER_API_KEY = os.environ.get(
     "ROUTER_API_KEY",
     "sk-e4eeda3c27c1138d-t2fk64-45c4a4bc",
 )
 ROUTER_BASE_URL = os.environ.get(
     "ROUTER_BASE_URL",
-    "https://kieuxuan257-bot-terminal.hf.space/v1",
+    "https://ninerouter-z20n.onrender.com/v1",
 )
 ROUTER_MODEL = os.environ.get(
     "ROUTER_MODEL",
-    "oc/qwen3.6-plus-free",
+    "mmf/mimo-auto",
 )
 
 SYSTEM_PROMPT = (
