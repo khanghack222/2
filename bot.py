@@ -1652,7 +1652,6 @@ async def auto_tiktok_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-@rate_limit(5)
 async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = " ".join(context.args) if context.args else ""
     if not query:
