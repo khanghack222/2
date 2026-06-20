@@ -83,7 +83,16 @@ async def _ask_router(question: str) -> str:
 
         def _call():
             with urllib.request.urlopen(req, timeout=60) as resp:
-                return json.loads(resp.read().decode())
+                text = resp.read().decode()
+                # SSE: parse first data: line from streaming response
+                data_line = None
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        data_line = line[6:]
+                if data_line:
+                    return json.loads(data_line)
+                return json.loads(text)
 
         data = await asyncio.to_thread(_call)
         return data["choices"][0]["message"]["content"].strip()
@@ -122,7 +131,16 @@ async def _ask_groq(question: str) -> str:
 
         def _call():
             with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode())
+                text = resp.read().decode()
+                # SSE: parse first data: line from streaming response
+                data_line = None
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        data_line = line[6:]
+                if data_line:
+                    return json.loads(data_line)
+                return json.loads(text)
 
         data = await asyncio.to_thread(_call)
         return data["choices"][0]["message"]["content"].strip()
@@ -154,7 +172,16 @@ async def _ask_openai(question: str) -> str:
 
         def _call():
             with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode())
+                text = resp.read().decode()
+                # SSE: parse first data: line from streaming response
+                data_line = None
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        data_line = line[6:]
+                if data_line:
+                    return json.loads(data_line)
+                return json.loads(text)
 
         data = await asyncio.to_thread(_call)
         return data["choices"][0]["message"]["content"].strip()
