@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS stats_errors (
 CREATE TABLE IF NOT EXISTS van_blacklist (
     id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL UNIQUE
 );
+CREATE TABLE IF NOT EXISTS ai_history (
+    user_id INTEGER PRIMARY KEY, messages TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
 """
 
 async def get_db():
@@ -119,6 +123,32 @@ async def get_stats_summary():
         "top_users": await _all("SELECT user_id,username,COUNT(*) as cnt FROM stats_cmds WHERE user_id IS NOT NULL GROUP BY user_id ORDER BY cnt DESC LIMIT 10"),
         "recent_errors": await _all("SELECT command,error,timestamp FROM stats_errors ORDER BY timestamp DESC LIMIT 10"),
     }
+
+async def save_ai_history(user_id: int, messages: list):
+    """Store full chat history (excluding system prompt) as JSON."""
+    db = await get_db()
+    import json
+    blob = json.dumps(messages, ensure_ascii=False)
+    await db.execute(
+        "INSERT OR REPLACE INTO ai_history (user_id, messages, updated_at) VALUES (?,?,?)",
+        (user_id, blob, time.time()),
+    )
+    await db.commit()
+
+async def load_ai_history(user_id: int) -> list:
+    """Load chat history; returns list of {role, content} dicts."""
+    db = await get_db()
+    cur = await db.execute("SELECT messages FROM ai_history WHERE user_id=?", (user_id,))
+    row = await cur.fetchone()
+    if row:
+        import json
+        return json.loads(row[0])
+    return []
+
+async def clear_ai_history(user_id: int):
+    db = await get_db()
+    await db.execute("DELETE FROM ai_history WHERE user_id=?", (user_id,))
+    await db.commit()
 
 async def get_van_blacklist():
     db = await get_db()

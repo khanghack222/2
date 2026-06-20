@@ -36,20 +36,20 @@ SYSTEM_PROMPT = (
 )
 
 
-async def ask_ai(question: str) -> str:
+async def ask_ai(question: str, history: list | None = None) -> str:
     """Send question to the best available LLM provider.
 
     Priority: 9Router (OpenCode Free) → Groq → OpenAI
     """
     # 1. 9Router / OpenCode Free (miễn phí) — luôn thử trước
     if ROUTER_BASE_URL:
-        return await _ask_router(question)
+        return await _ask_router(question, history)
     # 2. Groq (miễn phí)
     elif GROQ_API_KEY:
-        return await _ask_groq(question)
+        return await _ask_groq(question, history)
     # 3. OpenAI (trả phí)
     elif OPENAI_API_KEY:
-        return await _ask_openai(question)
+        return await _ask_openai(question, history)
     else:
         return (
             "❌ Chưa cấu hình AI API key.\n\n"
@@ -60,19 +60,22 @@ async def ask_ai(question: str) -> str:
         )
 
 
-async def _ask_router(question: str) -> str:
+async def _ask_router(question: str, history: list | None = None) -> str:
     """Use 9Router (OpenCode Free / Kiro / any model)."""
     try:
         headers = {"Content-Type": "application/json"}
         if ROUTER_API_KEY:
             headers["Authorization"] = f"Bearer {ROUTER_API_KEY}"
 
+        msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if history:
+            for h in history:
+                msgs.append({"role": h["role"], "content": h["content"]})
+        msgs.append({"role": "user", "content": question})
+
         body = json.dumps({
             "model": ROUTER_MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": question},
-            ],
+            "messages": msgs,
             "max_tokens": 4096,
             "temperature": 0.7,
         }).encode()
@@ -102,22 +105,25 @@ async def _ask_router(question: str) -> str:
         logger.error(f"Router HTTP error {e.code}: {e}")
         # Fallback: nếu 401 (key ko đúng), thử Groq
         if e.code == 401 and GROQ_API_KEY:
-            return await _ask_groq(question)
+            return await _ask_groq(question, history)
         return f"❌ Lỗi AI (9Router): HTTP {e.code}"
     except Exception as e:
         logger.error(f"Router API error: {e}")
         return f"❌ Lỗi AI (9Router): {e}"
 
 
-async def _ask_groq(question: str) -> str:
+async def _ask_groq(question: str, history: list | None = None) -> str:
     """Use Groq free LLM API."""
     try:
+        msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if history:
+            for h in history:
+                msgs.append({"role": h["role"], "content": h["content"]})
+        msgs.append({"role": "user", "content": question})
+
         body = json.dumps({
             "model": AI_MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": question},
-            ],
+            "messages": msgs,
             "max_tokens": 4096,
             "temperature": 0.7,
         }).encode()
@@ -151,15 +157,18 @@ async def _ask_groq(question: str) -> str:
         return f"❌ Lỗi AI: {e}"
 
 
-async def _ask_openai(question: str) -> str:
+async def _ask_openai(question: str, history: list | None = None) -> str:
     """Use OpenAI API."""
     try:
+        msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if history:
+            for h in history:
+                msgs.append({"role": h["role"], "content": h["content"]})
+        msgs.append({"role": "user", "content": question})
+
         body = json.dumps({
             "model": "gpt-3.5-turbo",
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": question},
-            ],
+            "messages": msgs,
             "max_tokens": 4096,
         }).encode()
 

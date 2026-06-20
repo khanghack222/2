@@ -1622,8 +1622,6 @@ async def tiktok_hashtag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 # ═══ AI Chatbot ═══
-_ai_history: dict = {}
-AI_HISTORY_LIMIT = 100
 
 # Auto-detect TikTok URLs in any message and reply with download
 tiktok_url_pattern = re.compile(r"(https?://(?:www\.)?tiktok\.com/@[\w.]+/video/\d+[^\s]*)", re.IGNORECASE)
@@ -1665,21 +1663,19 @@ async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if query.lower() in ("reset", "clear", "xoa", "xo"):
         user_id = update.effective_user.id
-        _ai_history.pop(user_id, None)
+        await db.clear_ai_history(user_id)
         await update.message.reply_text("✅ Đã xoá lịch sử chat.")
         return
     user_id = update.effective_user.id
-    if user_id not in _ai_history:
-        _ai_history[user_id] = []
-    _ai_history[user_id].append({"role": "user", "content": query})
-    if len(_ai_history[user_id]) > AI_HISTORY_LIMIT:
-        _ai_history[user_id] = _ai_history[user_id][-AI_HISTORY_LIMIT:]
+    history = await db.load_ai_history(user_id)
+    history.append({"role": "user", "content": query})
     thinking_msg = await update.message.reply_text("🔄 Đang suy nghĩ...")
     try:
-        answer = await ask_ai(query)
-        _ai_history[user_id].append({"role": "assistant", "content": answer})
+        answer = await ask_ai(query, history)
+        history.append({"role": "assistant", "content": answer})
         if len(answer) > 4000:
             answer = answer[:4000] + "..."
+        await db.save_ai_history(user_id, history)
         await thinking_msg.edit_text(answer)
     except Exception as e:
         logger.debug(f"AI failed: {e}")
