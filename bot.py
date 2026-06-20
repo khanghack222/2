@@ -306,22 +306,135 @@ def main_menu_keyboard():
     return InlineKeyboardMarkup(rows)
 
 
-# No-arg commands runnable straight from a menu button
+# Commands: auto-run (no-arg) + suggestions (need input)
 SECTION_RUN = {
-    "tienich": [("🌍 IP của tôi", "ip")],
-    "giaitri": [("🎭 Joke", "joke"), ("😂 Meme", "meme")],
-    "taichinh": [("💰 Crypto", "crypto"), ("💱 Tỷ giá", "tygia")],
+    "tienich": {
+        "auto": [("🌍 IP của tôi", "ip")],
+        "suggestions": [
+            ("🌤 Thời tiết Hà Nội", "weather", "hanoi"),
+            ("🌤 Thời tiết Đà Nẵng", "weather", "da nang"),
+            ("🌤 Thời tiết TP.HCM", "weather", "thanh pho ho chi minh"),
+            ("🔤 Dịch 'hello world'", "translate", "hello world"),
+            ("🔤 Dịch 'good morning'", "translate", "good morning"),
+            ("🔗 Rút gọn URL", "shorten", "https://example.com"),
+            ("🔗 Rút gọn YouTube", "shorten", "https://youtube.com/watch?v=123"),
+            ("📷 Chụp ảnh Google", "screenshot", "https://google.com"),
+        ],
+    },
+    "congcu": {
+        "auto": [],
+        "suggestions": [
+            ("💻 Code Python", "code", "py"),
+            ("💻 Code JavaScript", "code", "js"),
+            ("💻 Code HTML", "code", "html"),
+            ("🔐 Pass 16 ký tự", "password", "16"),
+            ("🔐 Pass 20 ký tự", "password", "20"),
+            ("🔐 Pass mặc định", "password", ""),
+            ("🔗 Bypass link", "bypass", "https://shorturl.at/abc123"),
+        ],
+    },
+    "giaitri": {
+        "auto": [("🎭 Joke", "joke"), ("😂 Meme", "meme")],
+        "suggestions": [
+            ("🔎 Anime Naruto", "anime", "naruto"),
+            ("🔎 Anime One Piece", "anime", "one piece"),
+            ("🔎 Anime Dragon Ball", "anime", "dragon ball"),
+            ("🔎 Anime Attack on Titan", "anime", "attack on titan"),
+        ],
+    },
+    "hoctap": {
+        "auto": [],
+        "suggestions": [
+            ("📚 Từ điển 'hello'", "dictionary", "hello"),
+            ("📚 Từ điển 'beautiful'", "dictionary", "beautiful"),
+            ("📚 Từ điển 'freedom'", "dictionary", "freedom"),
+            ("📖 Wikipedia 'Vietnam'", "wiki", "Vietnam"),
+            ("📖 Wikipedia 'Python'", "wiki", "Python"),
+            ("📖 Văn mẫu lớp 8", "van", ""),
+        ],
+    },
+    "taichinh": {
+        "auto": [("💰 Crypto", "crypto"), ("💱 Tỷ giá", "tygia")],
+        "suggestions": [],
+    },
+    "lich": {
+        "auto": [("📅 Lịch hôm nay", "lich")],
+        "suggestions": [
+            ("📅 Lịch 30/4/2026", "lich", "30/4/2026"),
+            ("📅 Lịch 2/9/2026", "lich", "2/9/2026"),
+            ("📅 Lịch Tết 2027", "lich", "1/1/2027"),
+            ("⏰ Nhắc 60 giây", "remind", "60 Mua sữa"),
+            ("⏰ Nhắc 5 phút", "remind", "300 Học bài"),
+            ("⏰ Nhắc 1 tiếng", "remind", "3600 Họp nhóm"),
+        ],
+    },
+    "ai": {
+        "auto": [],
+        "suggestions": [
+            ("🤖 Python là gì?", "ask", "Python là gì?"),
+            ("🤖 ChatGPT hoạt động?", "ask", "ChatGPT hoạt động ra sao?"),
+            ("🤖 Mẹo học tiếng Anh", "ask", "Mẹo học tiếng Anh hiệu quả"),
+        ],
+    },
+    "tiktok": {
+        "auto": [("🔥 Trending", "tiktok_trending")],
+        "suggestions": [
+            ("🔎 Tìm 'cooking'", "tiktok_search", "cooking"),
+            ("🔎 Tìm 'dance'", "tiktok_search", "dance"),
+            ("👤 Profile @username", "tiktok_profile", "username"),
+            ("📈 SEO 'nấu ăn'", "tiktok_seo", "nấu ăn"),
+            ("📈 SEO 'makeup'", "tiktok_seo", "makeup"),
+            ("🏷️ Tag #fyp", "tiktok_hashtag", "fyp"),
+            ("🏷️ Tag #dance", "tiktok_hashtag", "dance"),
+        ],
+    },
+    "stats": {
+        "auto": [("📊 Thống kê", "stats"), ("📜 Lịch sử", "myusage")],
+        "suggestions": [],
+    },
+    "nhac": {
+        "auto": [("📰 Tin tức", "news")],
+        "suggestions": [
+            ("🎵 Tải nhạc YouTube", "music", "https://youtube.com/watch?v=123"),
+            ("📰 Tin sức khỏe", "news", "sức khỏe"),
+            ("📰 Tin thể thao", "news", "thể thao"),
+        ],
+    },
+    "khac": {
+        "auto": [("🌍 IP", "ip"), ("📡 Trạng thái", "status")],
+        "suggestions": [],
+    },
 }
 
 
 def section_keyboard(key=None):
     rows = []
+    section_data = SECTION_RUN.get(key, {})
+    if isinstance(section_data, dict):
+        auto_cmds = section_data.get("auto", [])
+        suggestions = section_data.get("suggestions", [])
+    else:
+        auto_cmds = section_data
+        suggestions = []
+
+    # Auto-run buttons (no-arg commands)
     run_btns = [
         InlineKeyboardButton(label, callback_data=f"run_{cmd}")
-        for label, cmd in SECTION_RUN.get(key, [])
+        for label, cmd in auto_cmds
     ]
-    for i in range(0, len(run_btns), 2):  # 2 nút / hàng
+    for i in range(0, len(run_btns), 2):
         rows.append(run_btns[i:i + 2])
+
+    # Suggestion buttons (user types input → send)
+    sug_btns = [
+        InlineKeyboardButton(label, callback_data=f"suggest_{cmd}|{arg}")
+        for label, cmd, arg in suggestions
+    ]
+    for i in range(0, len(sug_btns), 2):
+        rows.append(sug_btns[i:i + 2])
+
+    if not rows:
+        rows.append([InlineKeyboardButton("ℹ️ Dùng /help", callback_data="noop")])
     rows.append([InlineKeyboardButton("⬅️ Quay lại menu", callback_data="menu_home")])
     return InlineKeyboardMarkup(rows)
 
@@ -336,12 +449,48 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     data = q.data
+
     # Quick-run a no-arg command from a button
-    if data.startswith("run_"):
+    if data.startswith("run_") and "|" not in data:
         handler = RUN_ACTIONS.get(data.replace("run_", ""))
         if handler:
             await handler(update, context)
         return
+
+    # Show suggestion with buttons
+    if data.startswith("suggest_"):
+        payload = data[len("suggest_"):]
+        sep = payload.find("|")
+        if sep == -1:
+            return
+        cmd = payload[:sep]
+        arg = payload[sep + 1:]
+        cmd_text = f"/{cmd} {arg}".strip()
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("\U0001f680 G\u1eedi ngay", callback_data=f"run_{cmd}|{arg}"),
+            ],
+            [InlineKeyboardButton("\u2b05\ufe0f Quay l\u1ea1i", callback_data="menu_home")],
+        ])
+        await q.edit_message_text(
+            f"\U0001f4dd **Nh\u1eadp l\u1ec7nh:**\n`{cmd_text}`\n\n"
+            f"\U0001f449 **G\u1eedi ngay:** Nh\u1ea5n n\u00fat \U0001f680\n"
+            f"\U0001f449 **T\u1eeb g\u1eedi:** Copy c\u00e1ch g\u1eedi v\u00e0o \u00f4 chat, s\u1eeda n\u1ed9i dung r\u1ed3i g\u1eedi",
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+        return    # Gửi ngay: run command with args
+    if data.startswith("run_") and "|" in data:
+        payload = data[len("run_"):]
+        sep = payload.find("|")
+        cmd = payload[:sep]
+        arg = payload[sep + 1:]
+        handler = RUN_ACTIONS.get(cmd)
+        if handler:
+            context.args = arg.split() if arg.strip() else []
+            await handler(update, context)
+        return
+
     if data == "menu_home":
         await q.edit_message_text(
             MENU_GREETING, reply_markup=main_menu_keyboard(), parse_mode="Markdown"
@@ -1957,6 +2106,30 @@ RUN_ACTIONS = {
     "meme": meme_cmd,
     "crypto": crypto_cmd,
     "tygia": tygia_cmd,
+    "weather": weather,
+    "translate": translate_cmd,
+    "shorten": shorten_cmd,
+    "screenshot": screenshot_cmd,
+    "password": password_cmd,
+    "bypass": bypass_cmd,
+    "code": code_cmd,
+    "anime": anime_cmd,
+    "dictionary": dictionary,
+    "wiki": wiki_cmd,
+    "van": van_cmd,
+    "lich": lich_cmd,
+    "remind": remind,
+    "ask": ask_cmd,
+    "tiktok_search": tiktok_search_cmd,
+    "tiktok_profile": tiktok_profile_cmd,
+    "tiktok_seo": tiktok_seo_cmd,
+    "tiktok_hashtag": tiktok_hashtag_cmd,
+    "tiktok_trending": tiktok_trending_cmd,
+    "stats": stats_cmd,
+    "myusage": myusage_cmd,
+    "news": news_cmd,
+    "music": music_cmd,
+    "status": status_cmd,
 }
 
 
@@ -2020,7 +2193,7 @@ async def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CallbackQueryHandler(menu_handler, pattern="^(menu_|run_)"))
+    app.add_handler(CallbackQueryHandler(menu_handler, pattern="^(menu_|run_|suggest_|noop)"))
     app.add_handler(CommandHandler("remind", remind))
     app.add_handler(CommandHandler("list", list_reminders))
     app.add_handler(CommandHandler("cancel", cancel))
