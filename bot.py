@@ -1623,7 +1623,7 @@ async def tiktok_hashtag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ═══ AI Chatbot ═══
 _ai_history: dict = {}
-AI_HISTORY_LIMIT = 10
+AI_HISTORY_LIMIT = 100
 
 # Auto-detect TikTok URLs in any message and reply with download
 tiktok_url_pattern = re.compile(r"(https?://(?:www\.)?tiktok\.com/@[\w.]+/video/\d+[^\s]*)", re.IGNORECASE)
