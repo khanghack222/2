@@ -277,6 +277,9 @@ MENU_SECTIONS = {
     "stats": ("📊  Thống kê",
         "`/stats`      — Xem thống kê sử dụng\n"
         "`/myusage`    — Xem lịch sử của bạn"),
+    "nhac": ("🎵  Nhạc & Tin tức",
+        "`/music`    — Tải nhạc YouTube\n"
+        "`/news`     — Tin tức mới nhất"),
     "khac": ("ℹ️  Hệ thống",
         "`/id`        — Thông tin Telegram của bạn\n"
         "`/status`    — Trạng thái & thời gian hoạt động\n"
@@ -407,7 +410,13 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/tiktok_search <từ khóa>`  — Tìm kiếm video\n"
         "  `/tiktok_trending`           — Video thịnh hành\n"
         "  `/tiktok_seo <từ khóa>`    — Gợi ý SEO\n"
-        "  `/tiktok_hashtag <tag>`      — Tra hashtag"
+        "  `/tiktok_hashtag <tag>`      — Tra hashtag\n\n"
+            "**Nhạc & Tin tức**\n"
+            "  `/music <url>`               — Tải nhạc YouTube\n"
+            "  `/news`                      — Tin tức mới nhất\n\n"
+            "**Quản lý nhóm (Admin)**\n"
+            "  `/kick`  `/ban`  `/unban`    — Quản lý thành viên\n"
+            "  `/mute`  `/unmute`           — Mute/Unmute"
     )
     await update.message.reply_text(msg)
 
@@ -838,6 +847,8 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("waiting_code"):
         await handle_code(update, context)
         return
+    if is_flood(update.effective_user.id):
+        return
     text = update.message.text
     if text.startswith("nhắc"):
         parts = text.split(" ", 1)
@@ -848,8 +859,14 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # FIX: log full traceback for debugging
     logger.exception(f"Update {update.update_id} caused error", exc_info=context.error)
+    cmd = "unknown"
+    if update and update.message and update.message.text and update.message.text.startswith("/"):
+        cmd = update.message.text.split()[0].split("@")[0].strip("/")
+    try:
+        await db.log_error(cmd, str(context.error)[:500])
+    except Exception:
+        pass
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1822,6 +1839,117 @@ async def tiktok_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ℹ️ Chưa bật auto TikTok cho chat này.")
 
 
+
+# --- Flood protection ---
+_flood_count = {}  # {user_id: [timestamps]}
+FLOOD_LIMIT = 8
+FLOOD_WINDOW = 15
+
+def is_flood(user_id: int) -> bool:
+    import time as _t
+    now = _t.monotonic()
+    if user_id not in _flood_count:
+        _flood_count[user_id] = []
+    _flood_count[user_id] = [ts for ts in _flood_count[user_id] if now - ts < FLOOD_WINDOW]
+    if len(_flood_count[user_id]) >= FLOOD_LIMIT:
+        return True
+    _flood_count[user_id].append(now)
+    return False
+
+
+@rate_limit(10)
+async def news_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import xml.etree.ElementTree as ET
+    feeds = [("https://vnexpress.net/rss/suc-khoe.rss","Sức khỏe"),("https://vnexpress.net/rss/doi-song.rss","Đời sống"),("https://vnexpress.net/rss/khoa-hoc.rss","Khoa học"),("https://vnexpress.net/rss/the-thao.rss","Thể thao")]
+    sel = None
+    src = " ".join(context.args).lower() if context.args else ""
+    for url, name in feeds:
+        if src and src in name.lower(): sel = (url,name); break
+    if not sel: import random as _r; sel = _r.choice(feeds)
+    url, name = sel
+    try:
+        xml_text = await fetch_text(url, timeout=15)
+        root = ET.fromstring(xml_text)
+        items = root.findall(".//item")[:8]
+        if not items: return await update.message.reply_text("Không có tin.")
+        lines = [f"📰 **{name}**"]
+        for item in items: t = item.findtext("title",""); l = item.findtext("link",""); lines.append(f"• [{t}]({l})")
+        await update.message.reply_text("\n".join(lines), disable_web_page_preview=True)
+    except Exception as e: logger.debug(f"News: {e}"); await update.message.reply_text("❌ Lỗi tin tức.")
+
+@rate_limit(5)
+async def music_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = " ".join(context.args) if context.args else ""
+    if not url or not ("youtube.com" in url or "youtu.be" in url): return await update.message.reply_text("Dùng: `/music <youtube_url>`", parse_mode="Markdown")
+    msg = await update.message.reply_text("⏳ Đang tải...")
+    try:
+        import yt_dlp, tempfile
+        ydl_opts = {"format":"bestaudio/best","outtmpl":tempfile.gettempdir()+"/%(id)s.%(ext)s","quiet":True}
+        def _dl():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                return ydl.prepare_filename(info), info.get("title","Audio"), info.get("duration",0)
+        fn, title, dur = await asyncio.to_thread(_dl)
+        with open(fn,"rb") as f: audio = f.read()
+        os.remove(fn)
+        ds = f"{dur//60}:{dur%60:02d}" if dur else ""
+        await msg.edit_text("📤 Đang gửi...")
+        await update.message.reply_audio(audio=audio, title=title[:200], caption=f"🎵 {title[:200]} ({ds})")
+        try: await msg.delete()
+        except: pass
+    except ImportError: await msg.edit_text("❌ Thiếu yt-dlp. pip install yt-dlp")
+    except Exception as e: logger.debug(f"Music: {e}"); await msg.edit_text(f"❌ {e}")
+
+async def kick_cmd(update, context):
+    if not update.effective_chat or update.effective_chat.type=="private": return await update.message.reply_text("Chỉ dùng trong group.")
+    m = await update.effective_chat.get_member(update.effective_user.id)
+    if m.status not in ("administrator","creator"): return await update.message.reply_text("Cần quyền Admin.")
+    t = update.message.reply_to_message.from_user.id if update.message.reply_to_message else (int(context.args[0]) if context.args else None)
+    if not t: return await update.message.reply_text("Reply hoặc /kick <id>")
+    try: await update.effective_chat.ban_member(t); await update.effective_chat.unban_member(t); await update.message.reply_text(f"Kick {t}.")
+    except Exception as e: await update.message.reply_text(f"Loi: {e}")
+
+async def ban_cmd(update, context):
+    if not update.effective_chat or update.effective_chat.type=="private": return await update.message.reply_text("Chỉ dùng trong group.")
+    m = await update.effective_chat.get_member(update.effective_user.id)
+    if m.status not in ("administrator","creator"): return await update.message.reply_text("Cần quyền Admin.")
+    t = update.message.reply_to_message.from_user.id if update.message.reply_to_message else (int(context.args[0]) if context.args else None)
+    if not t: return await update.message.reply_text("Reply hoặc /ban <id>")
+    try: await update.effective_chat.ban_member(t); await update.message.reply_text(f"Ban {t}.")
+    except Exception as e: await update.message.reply_text(f"Loi: {e}")
+
+async def unban_cmd(update, context):
+    if not update.effective_chat or update.effective_chat.type=="private": return await update.message.reply_text("Chỉ dùng trong group.")
+    m = await update.effective_chat.get_member(update.effective_user.id)
+    if m.status not in ("administrator","creator"): return await update.message.reply_text("Cần quyền Admin.")
+    t = update.message.reply_to_message.from_user.id if update.message.reply_to_message else (int(context.args[0]) if context.args else None)
+    if not t: return await update.message.reply_text("Reply hoặc /unban <id>")
+    try: await update.effective_chat.unban_member(t); await update.message.reply_text(f"Unban {t}.")
+    except Exception as e: await update.message.reply_text(f"Loi: {e}")
+
+async def mute_cmd(update, context):
+    if not update.effective_chat or update.effective_chat.type=="private": return await update.message.reply_text("Chỉ dùng trong group.")
+    m = await update.effective_chat.get_member(update.effective_user.id)
+    if m.status not in ("administrator","creator"): return await update.message.reply_text("Cần quyền Admin.")
+    t = update.message.reply_to_message.from_user.id if update.message.reply_to_message else (int(context.args[0]) if context.args else None)
+    if not t: return await update.message.reply_text("Reply hoặc /mute <id>")
+    try:
+        from telegram import ChatPermissions
+        await update.effective_chat.restrict_member(t, permissions=ChatPermissions(can_send_messages=False))
+        await update.message.reply_text(f"Mute {t}.")
+    except Exception as e: await update.message.reply_text(f"Loi: {e}")
+
+async def unmute_cmd(update, context):
+    if not update.effective_chat or update.effective_chat.type=="private": return await update.message.reply_text("Chỉ dùng trong group.")
+    m = await update.effective_chat.get_member(update.effective_user.id)
+    if m.status not in ("administrator","creator"): return await update.message.reply_text("Cần quyền Admin.")
+    t = update.message.reply_to_message.from_user.id if update.message.reply_to_message else (int(context.args[0]) if context.args else None)
+    if not t: return await update.message.reply_text("Reply hoặc /unmute <id>")
+    try:
+        from telegram import ChatPermissions
+        await update.effective_chat.restrict_member(t, permissions=ChatPermissions(can_send_messages=True))
+        await update.message.reply_text(f"Unmute {t}.")
+    except Exception as e: await update.message.reply_text(f"Loi: {e}")
 # Maps menu "run_" buttons to their handlers (defined after all handlers exist)
 RUN_ACTIONS = {
     "ip": ip_cmd,
@@ -1833,6 +1961,15 @@ RUN_ACTIONS = {
 
 
 # FIX: consolidated main function with proper startup sequence
+
+async def _backup_db_loop():
+    import shutil
+    while True:
+        await asyncio.sleep(6*3600)
+        try:
+            if os.path.exists("bot.db"): shutil.copy2("bot.db","bot.backup.db"); logger.info("DB backed up")
+        except Exception as e: logger.debug(f"Backup: {e}")
+
 async def main():
     app = Application.builder().token(TOKEN).build()
 
@@ -1871,6 +2008,13 @@ async def main():
         BotCommand("ask", "Hỏi AI Chatbot"),
         BotCommand("stats", "Thống kê sử dụng"),
         BotCommand("myusage", "Lịch sử của bạn"),
+        BotCommand("music", "Tải nhạc YouTube"),
+        BotCommand("news", "Tin tức"),
+        BotCommand("kick", "Kick user"),
+        BotCommand("ban", "Ban user"),
+        BotCommand("unban", "Unban user"),
+        BotCommand("mute", "Mute user"),
+        BotCommand("unmute", "Unmute user"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -1913,6 +2057,13 @@ async def main():
     app.add_handler(CommandHandler("tiktok_seo", tiktok_seo_cmd))
     app.add_handler(CommandHandler("tiktok_hashtag", tiktok_hashtag_cmd))
     app.add_handler(CommandHandler("ask", ask_cmd))
+    app.add_handler(CommandHandler("kick", kick_cmd))
+    app.add_handler(CommandHandler("ban", ban_cmd))
+    app.add_handler(CommandHandler("unban", unban_cmd))
+    app.add_handler(CommandHandler("mute", mute_cmd))
+    app.add_handler(CommandHandler("unmute", unmute_cmd))
+    app.add_handler(CommandHandler("news", news_cmd))
+    app.add_handler(CommandHandler("music", music_cmd))
     app.add_handler(CommandHandler("tiktok_auto", tiktok_auto_cmd))
     app.add_handler(CommandHandler("tiktok_stop", tiktok_stop_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
@@ -1957,6 +2108,7 @@ async def main():
 
     # FIX: re-arm reminders that were persisted before the last restart
     await reschedule_reminders(app.bot)
+    asyncio.create_task(_backup_db_loop())
 
     # FIX: use an Event to allow graceful shutdown instead of while+sleep
     try:
@@ -1974,9 +2126,13 @@ async def main():
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except SystemExit:
-        logger.info("Bot restarting...")
+    import time as _time
+    while True:
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+            break
+        except Exception as _e:
+            logger.exception(f"Bot crashed: {_e} - restarting in 5s...")
+            _time.sleep(5)
