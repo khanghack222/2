@@ -1,0 +1,63 @@
+{
+  "welcome": "Chào mừng bạn đến với bot! 🤖",
+  "help": {
+    "title": "📋 Trợ giúp",
+    "description": "Danh sách các lệnh có sẵn:",
+    "commands": {
+      "start": "Khởi động bot",
+      "help": "Hiển thị trợ giúp",
+      "menu": "Menu tương tác",
+      "weather": "Xem thời tiết",
+      "translate": "Dịch văn bản",
+      "crypto": "Giá cryptocurrency",
+      "stock": "Giá cổ phiếu",
+      "ask": "Hỏi AI",
+      "remind": "Đặt nhắc nhở",
+      "password": "Quản lý mật khẩu"
+    }
+  },
+  "weather": {
+    "city_not_found": "❌ Không tìm thấy thành phố: {city}",
+    "error": "❌ Lỗi khi lấy thời tiết",
+    "result": "🌤 Thời tiết tại {city}:\n🌡 Nhiệt độ: {temp}°C\n💧 Độ ẩm: {humidity}%\n💨 Gió: {wind} km/h"
+  },
+  "translate": {
+    "no_input": "❌ Vui lòng nhập văn bản cần dịch",
+    "error": "❌ Lỗi khi dịch văn bản"
+  },
+  "crypto": {
+    "price": "💰 {coin}: ${price}\n📈 24h: {change}%",
+    "error": "❌ Lỗi khi lấy giá crypto"
+  },
+  "ai": {
+    "thinking": "🤔 Đang suy nghĩ...",
+    "error": "❌ Lỗi khi gọi AI",
+    "no_api_key": "❌ Chưa cấu hình AI provider"
+  },
+  "reminder": {
+    "created": "✅ Đã đặt nhắc nhở lúc {time}",
+    "list_empty": "📭 Bạn không có nhắc nhở nào",
+    "deleted": "✅ Đã xóa nhắc nhở #{id}",
+    "not_found": "❌ Không tìm thấy nhắc nhở #{id}"
+  },
+  "password": {
+    "created": "✅ Đã lưu mật khẩu: {label}",
+    "list_empty": "🔐 Bạn chưa lưu mật khẩu nào",
+    "deleted": "✅ Đã xóa mật khẩu #{id}",
+    "not_found": "❌ Không tìm thấy mật khẩu #{id}"
+  },
+  "error": {
+    "generic": "❌ Đã xảy ra lỗi. Vui lòng thử lại.",
+    "not_found": "❌ Không tìm thấy",
+    "unauthorized": "❌ Bạn không có quyền thực hiện hành động này",
+    "rate_limit": "⏳ Bạn đang gửi quá nhiều yêu cầu. Vui lòng thử lại sau."
+  },
+  "common": {
+    "loading": "⏳ Đang xử lý...",
+    "success": "✅ Thành công",
+    "cancel": "❌ Đã hủy",
+    "back": "◀️ Quay lại",
+    "next": "▶️ Tiếp theo",
+    "previous": "◀️ Trước đó"
+  }
+}

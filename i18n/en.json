@@ -1,0 +1,63 @@
+{
+  "welcome": "Welcome to the bot! 🤖",
+  "help": {
+    "title": "📋 Help",
+    "description": "List of available commands:",
+    "commands": {
+      "start": "Start the bot",
+      "help": "Show help",
+      "menu": "Interactive menu",
+      "weather": "Check weather",
+      "translate": "Translate text",
+      "crypto": "Cryptocurrency prices",
+      "stock": "Stock prices",
+      "ask": "Ask AI",
+      "remind": "Set reminder",
+      "password": "Password management"
+    }
+  },
+  "weather": {
+    "city_not_found": "❌ City not found: {city}",
+    "error": "❌ Error fetching weather",
+    "result": "🌤 Weather in {city}:\n🌡 Temperature: {temp}°C\n💧 Humidity: {humidity}%\n💨 Wind: {wind} km/h"
+  },
+  "translate": {
+    "no_input": "❌ Please enter text to translate",
+    "error": "❌ Error translating text"
+  },
+  "crypto": {
+    "price": "💰 {coin}: ${price}\n📈 24h: {change}%",
+    "error": "❌ Error fetching crypto prices"
+  },
+  "ai": {
+    "thinking": "🤔 Thinking...",
+    "error": "❌ Error calling AI",
+    "no_api_key": "❌ AI provider not configured"
+  },
+  "reminder": {
+    "created": "✅ Reminder set for {time}",
+    "list_empty": "📭 You have no reminders",
+    "deleted": "✅ Deleted reminder #{id}",
+    "not_found": "❌ Reminder #{id} not found"
+  },
+  "password": {
+    "created": "✅ Saved password: {label}",
+    "list_empty": "🔐 You haven't saved any passwords",
+    "deleted": "✅ Deleted password #{id}",
+    "not_found": "❌ Password #{id} not found"
+  },
+  "error": {
+    "generic": "❌ An error occurred. Please try again.",
+    "not_found": "❌ Not found",
+    "unauthorized": "❌ You don't have permission to perform this action",
+    "rate_limit": "⏳ You're sending too many requests. Please try again later."
+  },
+  "common": {
+    "loading": "⏳ Processing...",
+    "success": "✅ Success",
+    "cancel": "❌ Cancelled",
+    "back": "◀️ Back",
+    "next": "▶️ Next",
+    "previous": "◀️ Previous"
+  }
+}
