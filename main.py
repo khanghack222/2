@@ -21,7 +21,7 @@ from services.reminder import ReminderService
 from services.password import PasswordService
 from ai.router import AIRouter
 from ai.providers import OpenRouterProvider, GroqProvider, OpenAIProvider
-from http.client import HttpClient
+from http_client.client import HttpClient
 
 # Configure logging
 logging.basicConfig(

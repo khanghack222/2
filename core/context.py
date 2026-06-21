@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from services.reminder import ReminderService
     from services.password import PasswordService
     from ai.router import AIRouter
-    from http.client import HttpClient
+    from http_client.client import HttpClient
     from core.middleware import MiddlewarePipeline
     from core.menu import MenuManager
     from core.i18n import Translator
