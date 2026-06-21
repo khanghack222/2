@@ -21,7 +21,6 @@ import database as db
 from dashboard import setup_routes as setup_dashboard
 from ai_chat import ask_ai
 
-# FIX: consolidated logging config, added rotation-friendly format
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     level=logging.INFO,
@@ -29,12 +28,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# FIX: validate TOKEN at startup instead of using a dummy fallback
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
     sys.exit("FATAL: BOT_TOKEN environment variable is required")
 
-# FIX: handle ADMIN_ID missing gracefully with warning
 ADMIN_ID_STR = os.environ.get("ADMIN_ID")
 ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR else None
 if ADMIN_ID is None:
@@ -46,14 +43,87 @@ API2_BYPASS_KEY = "thi-thi"
 PASSWORDS_FILE = "passwords.json"
 START_TIME = datetime.datetime.now()
 VAN_BLACKLIST_FILE = "van_blacklist.json"
+PROXY_LIST = []
 
-# Proxy list: paste proxy của bạn vào đây, mỗi dòng 1 cái
-# Định dạng: ip:port hoặc user:pass@ip:port
-PROXY_LIST = [
-    # Thay proxy của bạn vào bên dưới, ví dụ:
-    # "proxy1.example.com:8080",
-    # "user:pass@proxy2.example.com:3128",
-]
+# Thread-safety locks for shared mutable state
+_reminders_lock = asyncio.Lock()
+_passwords_lock = asyncio.Lock()
+_cache_lock = asyncio.Lock()
+_task_list: list[asyncio.Task] = []
+
+# ═══════════════════════════════════════════════════════════════
+#  🌐 Multi-language (EN/VI)
+# ═══════════════════════════════════════════════════════════════
+_user_lang = {}  # {user_id: "vi" | "en"} — in-memory cache, backed by DB
+
+STRINGS = {
+    "vi": {
+        "rate_limit": "⏳ Chậm thôi nào! Thử lại sau {s}s.",
+        "no_args_weather": "🌤 `/weather hanoi` — Thời tiết Hà Nội\n🌤 `/weather da nang` — Đà Nẵng",
+        "city_not_found": "❌ Không tìm thấy '{city}'. Thử /weather hanoi",
+        "weather_header": "🌤 **Thời tiết {place}:**",
+        "weather_humidity": "💧 Độ ẩm {val}%",
+        "weather_wind": "💨 Gió {val} km/h",
+        "api_limited": "⏳ API đang bị giới hạn, thử lại sau.",
+        "error_generic": "❌ Lỗi: {e}",
+        "not_found": "Không tìm thấy '{q}'.",
+        "help_title": "━━━ **Ví dụ sử dụng** ━━━",
+        "stock_title": "📈 **Giá cổ phiếu: {symbol}**",
+        "stock_price": "💰 Giá: **${price}**",
+        "stock_change": "📊 Thay đổi: {arrow} {change}%",
+        "stock_volume": "📦 Khối lượng: {vol}",
+        "stock_market": "🏢 Sàn: {market}",
+        "stock_no_args": "Dùng: `/stock FPT` hoặc `/stock VNM.VN`\n\nCổ phiếu VN thêm `.VN`: FPT.VN, VNM.VN, VCB.VN",
+        "yt_title": "🎵 **YouTube Downloader**",
+        "yt_processing": "⏳ Đang tải...",
+        "yt_sending": "📤 Đang gửi...",
+        "yt_no_url": "Nhập URL YouTube. VD: `/yt https://youtube.com/watch?v=...`",
+        "yt_invalid": "❌ URL không hợp lệ. Dùng: `/yt <url>`",
+        "yt_import_error": "❌ Thiếu yt-dlp. pip install yt-dlp",
+        "yt_success": "🎵 {title} ({duration})",
+        "lang_changed": "✅ Ngôn ngữ đã đổi sang: **Tiếng Việt**",
+    },
+    "en": {
+        "rate_limit": "⏳ Slow down! Try again in {s}s.",
+        "no_args_weather": "🌤 `/weather hanoi` — Weather in Hanoi\n🌤 `/weather new york` — Weather in New York",
+        "city_not_found": "❌ City '{city}' not found. Try /weather hanoi",
+        "weather_header": "🌤 **Weather in {place}:**",
+        "weather_humidity": "💧 Humidity {val}%",
+        "weather_wind": "💨 Wind {val} km/h",
+        "api_limited": "⏳ API rate limited, try again later.",
+        "error_generic": "❌ Error: {e}",
+        "not_found": "'{q}' not found.",
+        "help_title": "━━━ **Usage Examples** ━━━",
+        "stock_title": "📈 **Stock Price: {symbol}**",
+        "stock_price": "💰 Price: **${price}**",
+        "stock_change": "📊 Change: {arrow} {change}%",
+        "stock_volume": "📦 Volume: {vol}",
+        "stock_market": "🏢 Exchange: {market}",
+        "stock_no_args": "Usage: `/stock AAPL` or `/stock FPT.VN`\n\nVietnamese stocks add `.VN`: FPT.VN, VNM.VN, VCB.VN",
+        "yt_title": "🎵 **YouTube Downloader**",
+        "yt_processing": "⏳ Downloading...",
+        "yt_sending": "📤 Sending...",
+        "yt_no_url": "Enter a YouTube URL. Usage: `/yt https://youtube.com/watch?v=...`",
+        "yt_invalid": "❌ Invalid URL. Usage: `/yt <url>`",
+        "yt_import_error": "❌ yt-dlp not installed. pip install yt-dlp",
+        "yt_success": "🎵 {title} ({duration})",
+        "lang_changed": "✅ Language changed to: **English**",
+    },
+}
+
+
+def t(key: str, user_id=None, **kwargs) -> str:
+    lang = get_user_lang(user_id) if user_id else "vi"
+    s = STRINGS.get(lang, STRINGS["vi"]).get(key)
+    if s is None:
+        s = STRINGS["vi"].get(key, key)
+    return s.format(**kwargs) if kwargs else s
+
+
+def get_user_lang(user_id) -> str:
+    if user_id and user_id in _user_lang:
+        return _user_lang[user_id]
+    return "vi"
 
 
 
@@ -73,8 +143,18 @@ def safe_json_load(path, fallback):
 
 
 def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # --- Password encryption (Fernet) ---
@@ -107,21 +187,35 @@ def _get_fernet():
 
 
 def save_passwords(data):
-    token = _get_fernet().encrypt(json.dumps(data, ensure_ascii=False).encode("utf-8"))
-    with open(PASSWORDS_ENC_FILE, "wb") as f:
-        f.write(token)
+    tmp = PASSWORDS_ENC_FILE + ".tmp"
+    try:
+        token = _get_fernet().encrypt(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+        with open(tmp, "wb") as f:
+            f.write(token)
+        os.replace(tmp, PASSWORDS_ENC_FILE)
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def load_passwords():
-    # Migrate legacy plaintext passwords.json -> encrypted passwords.enc (once)
     if os.path.exists(PASSWORDS_FILE) and not os.path.exists(PASSWORDS_ENC_FILE):
         legacy = safe_json_load(PASSWORDS_FILE, {})
-        save_passwords(legacy)
-        try:
-            os.remove(PASSWORDS_FILE)
-        except OSError:
-            pass
-        logger.info("Migrated plaintext passwords -> encrypted store")
+        if legacy:
+            try:
+                # Atomic migration: write new first, delete old only if new succeeds
+                save_passwords(legacy)
+                try:
+                    os.remove(PASSWORDS_FILE)
+                except OSError:
+                    pass
+                logger.info("Migrated plaintext passwords -> encrypted store")
+            except Exception as e:
+                logger.warning("Password migration failed: %s", e)
         return legacy
     if not os.path.exists(PASSWORDS_ENC_FILE):
         return {}
@@ -130,9 +224,20 @@ def load_passwords():
             token = f.read()
         if not token:
             return {}
-        return json.loads(_get_fernet().decrypt(token).decode("utf-8"))
+        try:
+            return json.loads(_get_fernet().decrypt(token).decode("utf-8"))
+        except Exception:
+            logger.warning("Password decryption failed, file corrupted. Trying backup...")
+            # Try .bak version
+            bak = PASSWORDS_ENC_FILE + ".bak"
+            if os.path.exists(bak):
+                with open(bak, "rb") as f:
+                    token = f.read()
+                if token:
+                    return json.loads(_get_fernet().decrypt(token).decode("utf-8"))
+            return {}
     except Exception as e:
-        logger.warning("Cannot decrypt passwords: %s", e)
+        logger.warning("Cannot load passwords: %s", e)
         return {}
 
 
@@ -178,25 +283,55 @@ async def fetch_json(url, headers=None, data=None, timeout=10):
     return json.loads(raw.decode("utf-8"))
 
 
-# --- Simple TTL cache to cut down on repeat API calls ---
+# --- Simple TTL cache with LRU eviction to cut down on repeat API calls ---
 _cache = {}
-_cache_maxsize = 200
-_shutdown_event = None
+_cache_maxsize = 500
+_cache_access_order = []
+_shutdown_event = False
 
 
 def cache_get(key, ttl):
     entry = _cache.get(key)
     if entry is not None and (time.monotonic() - entry[0]) < ttl:
+        if key in _cache_access_order:
+            _cache_access_order.remove(key)
+        _cache_access_order.append(key)
         return entry[1]
+    if entry is not None:
+        _cache.pop(key, None)
+        if key in _cache_access_order:
+            _cache_access_order.remove(key)
     return None
 
 
 def cache_set(key, value):
+    if key in _cache_access_order:
+        _cache_access_order.remove(key)
+    while len(_cache) >= _cache_maxsize and _cache_access_order:
+        oldest = _cache_access_order.pop(0)
+        _cache.pop(oldest, None)
     _cache[key] = (time.monotonic(), value)
+    _cache_access_order.append(key)
 
 
-# --- Per-user rate limiting (anti-spam) ---
+# --- Per-user rate limiting (anti-spam) with periodic cleanup ---
 _last_call = {}
+_RATE_LIMIT_CLEANUP_INTERVAL = 300
+
+
+def _cleanup_rate_limits():
+    now = time.monotonic()
+    stale = [k for k, v in _last_call.items() if now - v > 3600]
+    for k in stale:
+        del _last_call[k]
+    flood_stale = []
+    for uid, timestamps in _flood_count.items():
+        if timestamps:
+            latest = max(timestamps)
+            if now - latest > 3600:
+                flood_stale.append(uid)
+    for k in flood_stale:
+        del _flood_count[k]
 
 
 def rate_limit(seconds=3):
@@ -209,9 +344,11 @@ def rate_limit(seconds=3):
             now = time.monotonic()
             elapsed = now - _last_call.get(key, 0.0)
             if elapsed < seconds:
-                await update.effective_message.reply_text(
-                    f"⏳ Chậm thôi nào! Thử lại sau {int(seconds - elapsed) + 1}s."
-                )
+                msg = update.effective_message
+                if msg:
+                    await msg.reply_text(
+                        t("rate_limit", user.id, s=int(seconds - elapsed) + 1)
+                    )
                 return
             _last_call[key] = now
             return await func(update, context)
@@ -258,7 +395,8 @@ MENU_SECTIONS = {
         "`/wiki`      — Tra Wikipedia"),
     "taichinh": ("💰  Tài chính",
         "`/crypto`    — Giá crypto (BTC, ETH…)\n"
-        "`/tygia`     — Tỷ giá ngoại tệ → VND"),
+        "`/tygia`     — Tỷ giá ngoại tệ → VND\n"
+        "`/stock`     — Giá cổ phiếu real-time"),
     "lich": ("📅  Lịch & Nhắc nhở",
         "`/lich`      — Lịch âm (hôm nay / ngày)\n"
         "`/remind`    — Đặt nhắc nhở\n"
@@ -266,7 +404,9 @@ MENU_SECTIONS = {
         "`/cancel`    — Huỷ nhắc nhở"),
     "ai": ("🤖  AI Chatbot",
         "`/ask <câu hỏi>`    — Hỏi AI ChatGPT/Claude\n"
-        "`/ask reset`        — Xoá lịch sử chat"),
+        "`/ask reset`        — Xoá lịch sử chat\n"
+        "`/clear`            — Xoá lịch sử chat\n"
+        "`/clear all`        — Xoá toàn bộ dữ liệu"),
     "tiktok": ("🎵  TikTok",
         "`/tiktok <url>`      — Tải video không logo\n"
         "`/tiktok_profile <u>` — Xem profile\n"
@@ -278,11 +418,13 @@ MENU_SECTIONS = {
         "`/stats`      — Xem thống kê sử dụng\n"
         "`/myusage`    — Xem lịch sử của bạn"),
     "nhac": ("🎵  Nhạc & Tin tức",
-        "`/music`    — Tải nhạc YouTube\n"
+        "`/yt`       — Tải video YouTube\n"
+        "`/music`    — Tải nhạc YouTube (audio)\n"
         "`/news`     — Tin tức mới nhất"),
     "khac": ("ℹ️  Hệ thống",
         "`/id`        — Thông tin Telegram của bạn\n"
         "`/status`    — Trạng thái & thời gian hoạt động\n"
+        "`/lang`      — Đổi ngôn ngữ (EN/VI)\n"
         "`/help`      — Hướng dẫn chi tiết"),
 }
 
@@ -355,7 +497,15 @@ SECTION_RUN = {
     },
     "taichinh": {
         "auto": [("💰 Crypto", "crypto"), ("💱 Tỷ giá", "tygia")],
-        "suggestions": [],
+        "suggestions": [
+            ("📈 FPT.VN", "stock", "FPT.VN"),
+            ("📈 VNM.VN", "stock", "VNM.VN"),
+            ("📈 VCB.VN", "stock", "VCB.VN"),
+            ("📈 TCB.VN", "stock", "TCB.VN"),
+            ("📈 AAPL", "stock", "AAPL"),
+            ("📈 TSLA", "stock", "TSLA"),
+            ("📈 NVDA", "stock", "NVDA"),
+        ],
     },
     "lich": {
         "auto": [("📅 Lịch hôm nay", "lich")],
@@ -571,16 +721,16 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _fire_reminder(bot, user_id, rid, content, due_ts):
-    """Sleep until due_ts (absolute epoch) then deliver, surviving restarts."""
     try:
         await asyncio.sleep(max(0, due_ts - time.time()))
         await bot.send_message(chat_id=int(user_id), text=f"⏰ Nhắc nhở #{rid}: {content}")
     except Exception as e:
         logger.warning(f"Failed to send reminder #{rid}: {e}")
     finally:
-        if user_id in reminders:
-            reminders[user_id] = [r for r in reminders[user_id] if r["id"] != rid]
-            save_json(DATA_FILE, reminders)
+        async with _reminders_lock:
+            if user_id in reminders:
+                reminders[user_id] = [r for r in reminders[user_id] if r["id"] != rid]
+                save_json(DATA_FILE, reminders)
 
 
 async def reschedule_reminders(bot):
@@ -600,22 +750,21 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         seconds = int(context.args[0])
         content = " ".join(context.args[1:]) if len(context.args) > 1 else "Nhắc nhở!"
-        # FIX: upper bound to prevent memory exhaustion
         if seconds < 5:
             await update.message.reply_text("Tối thiểu 5 giây.")
             return
-        if seconds > 86400 * 30:  # 30 days max
+        if seconds > 86400 * 30:
             await update.message.reply_text("Tối đa 30 ngày.")
             return
 
         user_id = str(update.effective_user.id)
-        if user_id not in reminders:
-            reminders[user_id] = []
-        # FIX: use max+1 (not len+1) so ids don't collide after deletions
-        rid = max((r["id"] for r in reminders[user_id]), default=0) + 1
-        due_ts = time.time() + seconds
-        reminders[user_id].append({"id": rid, "content": content, "seconds": seconds, "due_ts": due_ts})
-        save_json(DATA_FILE, reminders)
+        async with _reminders_lock:
+            if user_id not in reminders:
+                reminders[user_id] = []
+            rid = max((r["id"] for r in reminders[user_id]), default=0) + 1
+            due_ts = time.time() + seconds
+            reminders[user_id].append({"id": rid, "content": content, "seconds": seconds, "due_ts": due_ts})
+            save_json(DATA_FILE, reminders)
 
         await update.message.reply_text(f" Đã đặt nhắc nhở #{rid}: '{content}' sau {seconds}s")
         asyncio.create_task(_fire_reminder(context.application.bot, user_id, rid, content, due_ts))
@@ -641,12 +790,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         rid = int(context.args[0])
         user_id = str(update.effective_user.id)
-        if user_id in reminders:
-            reminders[user_id] = [r for r in reminders[user_id] if r["id"] != rid]
-            save_json(DATA_FILE, reminders)
-            await update.message.reply_text(f" Đã hủy nhắc nhở #{rid}")
-        else:
-            await update.message.reply_text("Không tìm thấy nhắc nhở.")
+        async with _reminders_lock:
+            if user_id in reminders:
+                reminders[user_id] = [r for r in reminders[user_id] if r["id"] != rid]
+                save_json(DATA_FILE, reminders)
+                await update.message.reply_text(f" Đã hủy nhắc nhở #{rid}")
+            else:
+                await update.message.reply_text("Không tìm thấy nhắc nhở.")
     except (IndexError, ValueError):
         await update.message.reply_text("Sai cú pháp. Ví dụ: /cancel 1")
 
@@ -796,14 +946,13 @@ async def password_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pw = "".join(secrets.choice(chars) for _ in range(length))
 
     user_id = str(update.effective_user.id)
-    if user_id not in passwords:
-        passwords[user_id] = []
-    idx = max((p["id"] for p in passwords[user_id]), default=0) + 1
-    label = " ".join(context.args[1:]) if len(context.args) > 1 else f"pass{idx}"
-    # FIX: passwords stored in plaintext — for a personal bot this is acceptable,
-    # but consider adding encryption for production use
-    passwords[user_id].append({"id": idx, "label": label, "password": pw})
-    save_passwords(passwords)
+    async with _passwords_lock:
+        if user_id not in passwords:
+            passwords[user_id] = []
+        idx = max((p["id"] for p in passwords[user_id]), default=0) + 1
+        label = " ".join(context.args[1:]) if len(context.args) > 1 else f"pass{idx}"
+        passwords[user_id].append({"id": idx, "label": label, "password": pw})
+        save_passwords(passwords)
     await update.message.reply_text(
         f" Đã tạo & lưu mật khẩu #{idx}:\nTên: {label}\nMật khẩu: `{pw}`\n\nDùng /passwords để xem danh sách.",
         parse_mode="Markdown"
@@ -831,13 +980,14 @@ async def editpass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Sai cú pháp. VD: /editpass 1 abc123")
             return
         user_id = str(update.effective_user.id)
-        if user_id in passwords:
-            for p in passwords[user_id]:
-                if p["id"] == pid:
-                    p["password"] = new_val
-                    save_passwords(passwords)
-                    await update.message.reply_text(f" Đã cập nhật mật khẩu #{pid}: `{new_val}`", parse_mode="Markdown")
-                    return
+        async with _passwords_lock:
+            if user_id in passwords:
+                for p in passwords[user_id]:
+                    if p["id"] == pid:
+                        p["password"] = new_val
+                        save_passwords(passwords)
+                        await update.message.reply_text(f" Đã cập nhật mật khẩu #{pid}: `{new_val}`", parse_mode="Markdown")
+                        return
         await update.message.reply_text(f"Không tìm thấy mật khẩu #{pid}")
     except (IndexError, ValueError):
         await update.message.reply_text("Sai cú pháp. VD: /editpass 1 abc123")
@@ -1260,7 +1410,6 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Bạn không có quyền restart bot.")
         return
     await update.message.reply_text("Đang restart bot...")
-    # FIX: flush JSON state before exit to prevent data loss
     save_json(DATA_FILE, reminders)
     save_passwords(passwords)
     logger.info("Bot restart initiated by user %s", user_id)
@@ -1318,7 +1467,8 @@ async def calc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Nhập biểu thức. VD:\n/calc 1+1\n/calc 2x3 (x = nhân)\n/calc 6:2 (: = chia)")
         return
     try:
-        expr_normalized = expr.replace("x", "*").replace("X", "*").replace(":", "/")
+        expr_normalized = re.sub(r'(\d)x(\d)', r'\1*\2', expr, flags=re.IGNORECASE)
+        expr_normalized = expr_normalized.replace(":", "/")
         result = safe_eval(expr_normalized)
         await update.message.reply_text(f"= {result}")
     except Exception as e:
@@ -1798,6 +1948,8 @@ async def auto_tiktok_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     match = tiktok_url_pattern.search(text)
     if not match or context.user_data.get("waiting_code"):
         return  # Let echo handle it
+    if is_flood(update.effective_user.id):
+        return
     url = match.group(1).strip()
     try:
         api_url = f"{TIKTOK_API}?url={urllib.parse.quote(url)}"
@@ -1809,12 +1961,18 @@ async def auto_tiktok_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stats = d.get("stats", {})
             video_url = d.get("play") or d.get("wmplay") or ""
             if video_url:
-                caption = f"🎵 **TikTok Video**\n\n\U0001f464 **@{author}**\n\n\U0001f4dd {desc[:200]}\n\n\u2764 {stats.get('digg_count',0):,}  \U0001f440 {stats.get('play_count',0):,}"
+                caption = (
+                    f"🎵 **TikTok Video**\n\n"
+                    f"👤 **@{author}**\n\n"
+                    f"📝 {desc[:200]}\n\n"
+                    f"❤️ {stats.get('digg_count',0):,}  "
+                    f"👀 {stats.get('play_count',0):,}"
+                )
                 vd = await fetch_bytes(video_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
                 await update.message.reply_video(video=vd, caption=caption, parse_mode="Markdown")
                 return
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Auto TikTok failed: {e}")
 
 async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = " ".join(context.args) if context.args else ""
@@ -1846,6 +2004,25 @@ async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.debug(f"AI failed: {e}")
         await thinking_msg.edit_text(f"❌ Lỗi AI: {e}")
+
+
+@rate_limit(3)
+async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Clear AI chat history or all user data."""
+    user_id = update.effective_user.id
+    arg = " ".join(context.args).lower() if context.args else ""
+    if arg == "all":
+        await db.clear_ai_history(user_id)
+        if user_id in passwords:
+            passwords[user_id] = []
+            save_passwords(passwords)
+        if str(user_id) in reminders:
+            reminders[str(user_id)] = []
+            save_json(DATA_FILE, reminders)
+        await update.message.reply_text("✅ Đã xoá tất cả dữ liệu (chat, mật khẩu, nhắc nhở).")
+    else:
+        await db.clear_ai_history(user_id)
+        await update.message.reply_text("✅ Đã xoá lịch sử chat AI. Dùng `/clear all` để xoá toàn bộ.", parse_mode="Markdown")
 
 
 # ═══ Stats Commands ═══
@@ -1994,9 +2171,9 @@ _flood_count = {}  # {user_id: [timestamps]}
 FLOOD_LIMIT = 8
 FLOOD_WINDOW = 15
 
+
 def is_flood(user_id: int) -> bool:
-    import time as _t
-    now = _t.monotonic()
+    now = time.monotonic()
     if user_id not in _flood_count:
         _flood_count[user_id] = []
     _flood_count[user_id] = [ts for ts in _flood_count[user_id] if now - ts < FLOOD_WINDOW]
@@ -2009,45 +2186,286 @@ def is_flood(user_id: int) -> bool:
 @rate_limit(10)
 async def news_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import xml.etree.ElementTree as ET
-    feeds = [("https://vnexpress.net/rss/suc-khoe.rss","Sức khỏe"),("https://vnexpress.net/rss/doi-song.rss","Đời sống"),("https://vnexpress.net/rss/khoa-hoc.rss","Khoa học"),("https://vnexpress.net/rss/the-thao.rss","Thể thao")]
+    feeds = [
+        ("https://vnexpress.net/rss/suc-khoe.rss", "Sức khỏe"),
+        ("https://vnexpress.net/rss/doi-song.rss", "Đời sống"),
+        ("https://vnexpress.net/rss/khoa-hoc.rss", "Khoa học"),
+        ("https://vnexpress.net/rss/the-thao.rss", "Thể thao"),
+        ("https://vnexpress.net/rss/tin-moi.rss", "Tin mới"),
+    ]
     sel = None
     src = " ".join(context.args).lower() if context.args else ""
     for url, name in feeds:
-        if src and src in name.lower(): sel = (url,name); break
-    if not sel: import random as _r; sel = _r.choice(feeds)
+        if src and src in name.lower():
+            sel = (url, name)
+            break
+    if not sel:
+        import random as _r
+        sel = _r.choice(feeds)
     url, name = sel
     try:
         xml_text = await fetch_text(url, timeout=15)
         root = ET.fromstring(xml_text)
         items = root.findall(".//item")[:8]
-        if not items: return await update.message.reply_text("Không có tin.")
+        if not items:
+            return await update.message.reply_text("Không có tin.")
         lines = [f"📰 **{name}**"]
-        for item in items: t = item.findtext("title",""); l = item.findtext("link",""); lines.append(f"• [{t}]({l})")
+        for item in items:
+            t = item.findtext("title", "Không tiêu đề")
+            l = item.findtext("link", "")
+            if t and l:
+                lines.append(f"• [{t}]({l})")
         await update.message.reply_text("\n".join(lines), disable_web_page_preview=True)
-    except Exception as e: logger.debug(f"News: {e}"); await update.message.reply_text("❌ Lỗi tin tức.")
+    except ET.ParseError as e:
+        logger.debug(f"News XML parse error: {e}")
+        await update.message.reply_text("❌ Lỗi đọc tin tức.")
+    except Exception as e:
+        logger.debug(f"News: {e}")
+        await update.message.reply_text("❌ Lỗi tin tức.")
 
 @rate_limit(5)
 async def music_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = " ".join(context.args) if context.args else ""
-    if not url or not ("youtube.com" in url or "youtu.be" in url): return await update.message.reply_text("Dùng: `/music <youtube_url>`", parse_mode="Markdown")
+    if not url or not ("youtube.com" in url or "youtu.be" in url):
+        return await update.message.reply_text("Dùng: `/music <youtube_url>`", parse_mode="Markdown")
     msg = await update.message.reply_text("⏳ Đang tải...")
+    fn = None
     try:
-        import yt_dlp, tempfile
-        ydl_opts = {"format":"bestaudio/best","outtmpl":tempfile.gettempdir()+"/%(id)s.%(ext)s","quiet":True}
+        import yt_dlp
+        import tempfile
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": os.path.join(tempfile.gettempdir(), "%(id)s.%(ext)s"),
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 30,
+        }
         def _dl():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-                return ydl.prepare_filename(info), info.get("title","Audio"), info.get("duration",0)
+                return ydl.prepare_filename(info), info.get("title", "Audio"), info.get("duration", 0)
         fn, title, dur = await asyncio.to_thread(_dl)
-        with open(fn,"rb") as f: audio = f.read()
-        os.remove(fn)
+        if not os.path.exists(fn):
+            await msg.edit_text("❌ Không tìm thấy file audio.")
+            return
+        with open(fn, "rb") as f:
+            audio = f.read()
         ds = f"{dur//60}:{dur%60:02d}" if dur else ""
         await msg.edit_text("📤 Đang gửi...")
         await update.message.reply_audio(audio=audio, title=title[:200], caption=f"🎵 {title[:200]} ({ds})")
-        try: await msg.delete()
-        except: pass
-    except ImportError: await msg.edit_text("❌ Thiếu yt-dlp. pip install yt-dlp")
-    except Exception as e: logger.debug(f"Music: {e}"); await msg.edit_text(f"❌ {e}")
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+    except ImportError:
+        await msg.edit_text("❌ Thiếu yt-dlp. pip install yt-dlp")
+    except Exception as e:
+        logger.debug(f"Music: {e}")
+        await msg.edit_text(f"❌ Lỗi tải nhạc: {str(e)[:200]}")
+    finally:
+        if fn and os.path.exists(fn):
+            try:
+                os.remove(fn)
+            except OSError:
+                pass
+
+
+@rate_limit(5)
+async def stock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Real-time stock price using yfinance."""
+    symbol = " ".join(context.args).upper().strip() if context.args else ""
+    if not symbol:
+        await update.message.reply_text(
+            t("stock_no_args", update.effective_user.id),
+            parse_mode="Markdown",
+        )
+        return
+    # Auto-add .VN suffix for common Vietnamese stocks without suffix
+    vn_tickers = {"FPT", "VNM", "VCB", "BID", "CTG", "TCB", "MBB", "VPB", "STB",
+                  "ACB", "TPB", "HDB", "VIB", "EIB", "SSB", "PVB", "PVD", "PLX",
+                  "SAB", "MSN", "VRE", "VIC", "MWG", "PNJ", "GMD", "HPG", "NKG",
+                  "HSG", "VGC", "VSH", "DPM", "DCM", "CSV", "ANC", "BAF", "DGC"}
+    if "." not in symbol and symbol in vn_tickers:
+        symbol = f"{symbol}.VN"
+    cache_key = f"stock:{symbol}"
+    cached = cache_get(cache_key, ttl=60)
+    if cached:
+        await update.message.reply_text(cached, parse_mode="Markdown")
+        return
+    try:
+        import yfinance as yf
+
+        def _fetch_stock(sym):
+            t = yf.Ticker(sym)
+            info = t.fast_info
+            return info.last_price, info.previous_close, info.last_volume, getattr(info, "exchange", "N/A")
+
+        price, prev, vol, market = await asyncio.to_thread(_fetch_stock, symbol)
+        if price is None:
+            await update.message.reply_text(t("not_found", uid, q=symbol))
+            return
+        change = ((price - prev) / prev) * 100 if prev and prev > 0 else 0
+        arrow = "📈" if change >= 0 else "📉"
+        vol = info.last_volume or 0
+        market = getattr(info, "exchange", "N/A")
+        msg = (
+            f"{t('stock_title', update.effective_user.id, symbol=symbol)}\n"
+            f"{t('stock_price', update.effective_user.id, price=f'{price:,.2f}')}\n"
+            f"{t('stock_change', update.effective_user.id, arrow=arrow, change=f'{change:+.2f}')}\n"
+            f"{t('stock_volume', update.effective_user.id, vol=f'{vol:,}')}\n"
+            f"{t('stock_market', update.effective_user.id, market=market)}"
+        )
+        cache_set(cache_key, msg)
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except ImportError:
+        await update.message.reply_text("❌ Thiếu yfinance. pip install yfinance")
+    except Exception as e:
+        logger.debug(f"Stock lookup failed: {symbol} -> {e}")
+        await update.message.reply_text(
+            t("not_found", uid, q=symbol)
+        )
+
+
+async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Switch language EN/VI."""
+    user_id = update.effective_user.id
+    arg = (context.args[0].lower() if context.args else "").strip()
+    if arg in ("en", "vi"):
+        _user_lang[user_id] = arg
+        await asyncio.gather(
+            db.set_user_lang(user_id, arg),
+            update.message.reply_text(t("lang_changed", user_id), parse_mode="Markdown"),
+        )
+    else:
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🇻🇳 Tiếng Việt", callback_data="lang_vi"),
+                InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
+            ]
+        ])
+        await update.message.reply_text(
+            "🌐 **Choose language:**\n\n"
+            "• 🇻🇳 **Tiếng Việt**\n"
+            "• 🇬🇧 **English**",
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+
+
+async def lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle language selection callback."""
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+    user_id = q.from_user.id
+    if data == "lang_vi":
+        _user_lang[user_id] = "vi"
+        await asyncio.gather(
+            db.set_user_lang(user_id, "vi"),
+            q.edit_message_text("✅ Đã đổi sang **Tiếng Việt**", parse_mode="Markdown"),
+        )
+    elif data == "lang_en":
+        _user_lang[user_id] = "en"
+        await asyncio.gather(
+            db.set_user_lang(user_id, "en"),
+            q.edit_message_text("✅ Switched to **English**", parse_mode="Markdown"),
+        )
+
+
+@rate_limit(10)
+async def yt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Download YouTube video (not just audio). Supports format selection."""
+    uid = update.effective_user.id
+    url = " ".join(context.args) if context.args else ""
+    if not url or not ("youtube.com" in url or "youtu.be" in url):
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🎵 Audio", callback_data="yt_audio"),
+                InlineKeyboardButton("🎬 Video", callback_data="yt_video"),
+            ]
+        ])
+        await update.message.reply_text(
+            t("yt_title", uid) + "\n\n" + t("yt_no_url", uid),
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+        return
+    fmt = context.user_data.get("yt_format", "audio")
+    await _download_yt(update, url, fmt)
+
+
+async def _download_yt(update: Update, url: str, fmt: str = "audio"):
+    """Core YouTube download logic."""
+    uid = update.effective_user.id
+    msg = await update.message.reply_text(t("yt_processing", uid))
+    fn = None
+    try:
+        import yt_dlp
+        import tempfile
+        if fmt == "video":
+            ydl_opts = {
+                "format": "best[ext=mp4]/best",
+                "outtmpl": os.path.join(tempfile.gettempdir(), "%(id)s.%(ext)s"),
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 30,
+            }
+        else:
+            ydl_opts = {
+                "format": "bestaudio/best",
+                "outtmpl": os.path.join(tempfile.gettempdir(), "%(id)s.%(ext)s"),
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 30,
+            }
+
+        def _dl():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                return ydl.prepare_filename(info), info.get("title", "Video"), info.get("duration", 0)
+
+        fn, title, dur = await asyncio.to_thread(_dl)
+        if not os.path.exists(fn):
+            await msg.edit_text("❌ File not found.")
+            return
+        ds = f"{dur//60}:{dur%60:02d}" if dur else ""
+        await msg.edit_text(t("yt_sending", uid))
+        with open(fn, "rb") as f:
+            media_data = f.read()
+        caption = t("yt_success", uid, title=title[:200], duration=ds)
+        if fmt == "video":
+            await update.message.reply_video(video=media_data, caption=caption, parse_mode="Markdown")
+        else:
+            await update.message.reply_audio(audio=media_data, title=title[:200], caption=caption)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+    except ImportError:
+        await msg.edit_text(t("yt_import_error", uid))
+    except Exception as e:
+        logger.debug(f"YT download failed: {e}")
+        await msg.edit_text(f"❌ {str(e)[:200]}")
+    finally:
+        if fn and os.path.exists(fn):
+            try:
+                os.remove(fn)
+            except OSError:
+                pass
+
+
+async def yt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle yt audio/video format selection."""
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+    if data == "yt_audio":
+        context.user_data["yt_format"] = "audio"
+        await q.edit_message_text("🎵 **Audio mode** selected.\nNow send a YouTube URL.", parse_mode="Markdown")
+    elif data == "yt_video":
+        context.user_data["yt_format"] = "video"
+        await q.edit_message_text("🎬 **Video mode** selected.\nNow send a YouTube URL.", parse_mode="Markdown")
+
 
 async def kick_cmd(update, context):
     if not update.effective_chat or update.effective_chat.type=="private": return await update.message.reply_text("Chỉ dùng trong group.")
@@ -2077,28 +2495,72 @@ async def unban_cmd(update, context):
     except Exception as e: await update.message.reply_text(f"Loi: {e}")
 
 async def mute_cmd(update, context):
-    if not update.effective_chat or update.effective_chat.type=="private": return await update.message.reply_text("Chỉ dùng trong group.")
+    if not update.effective_chat or update.effective_chat.type == "private":
+        return await update.message.reply_text("Chỉ dùng trong group.")
     m = await update.effective_chat.get_member(update.effective_user.id)
-    if m.status not in ("administrator","creator"): return await update.message.reply_text("Cần quyền Admin.")
+    if m.status not in ("administrator", "creator"):
+        return await update.message.reply_text("Cần quyền Admin.")
     t = update.message.reply_to_message.from_user.id if update.message.reply_to_message else (int(context.args[0]) if context.args else None)
-    if not t: return await update.message.reply_text("Reply hoặc /mute <id>")
+    if not t:
+        return await update.message.reply_text("Reply hoặc /mute <id>")
     try:
         from telegram import ChatPermissions
-        await update.effective_chat.restrict_member(t, permissions=ChatPermissions(can_send_messages=False))
-        await update.message.reply_text(f"Mute {t}.")
-    except Exception as e: await update.message.reply_text(f"Loi: {e}")
+        await update.effective_chat.restrict_member(
+            t,
+            permissions=ChatPermissions(
+                can_send_messages=False,
+                can_send_media_messages=False,
+                can_send_polls=False,
+                can_send_other_messages=False,
+                can_add_web_page_previews=False,
+                can_send_audios=False,
+                can_send_documents=False,
+                can_send_photos=False,
+                can_send_videos=False,
+                can_send_video_notes=False,
+                can_send_voice_notes=False,
+            ),
+            until_date=None,
+        )
+        await update.message.reply_text(f"🔇 Muted {t} (vĩnh viễn).")
+    except Exception as e:
+        await update.message.reply_text(f"Lỗi: Bot cần quyền 'restrict members'.")
+
 
 async def unmute_cmd(update, context):
-    if not update.effective_chat or update.effective_chat.type=="private": return await update.message.reply_text("Chỉ dùng trong group.")
+    if not update.effective_chat or update.effective_chat.type == "private":
+        return await update.message.reply_text("Chỉ dùng trong group.")
     m = await update.effective_chat.get_member(update.effective_user.id)
-    if m.status not in ("administrator","creator"): return await update.message.reply_text("Cần quyền Admin.")
+    if m.status not in ("administrator", "creator"):
+        return await update.message.reply_text("Cần quyền Admin.")
     t = update.message.reply_to_message.from_user.id if update.message.reply_to_message else (int(context.args[0]) if context.args else None)
-    if not t: return await update.message.reply_text("Reply hoặc /unmute <id>")
+    if not t:
+        return await update.message.reply_text("Reply hoặc /unmute <id>")
     try:
         from telegram import ChatPermissions
-        await update.effective_chat.restrict_member(t, permissions=ChatPermissions(can_send_messages=True))
-        await update.message.reply_text(f"Unmute {t}.")
-    except Exception as e: await update.message.reply_text(f"Loi: {e}")
+        await update.effective_chat.restrict_member(
+            t,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_invite_users=True,
+                can_pin_messages=True,
+                can_change_info=True,
+            ),
+            until_date=None,
+        )
+        await update.message.reply_text(f"🔊 Unmuted {t} (khôi phục toàn bộ quyền).")
+    except Exception as e:
+        await update.message.reply_text(f"Lỗi: Bot cần quyền 'restrict members'.")
 # Maps menu "run_" buttons to their handlers (defined after all handlers exist)
 RUN_ACTIONS = {
     "ip": ip_cmd,
@@ -2129,6 +2591,9 @@ RUN_ACTIONS = {
     "myusage": myusage_cmd,
     "news": news_cmd,
     "music": music_cmd,
+    "stock": stock_cmd,
+    "yt": yt_cmd,
+    "lang": lang_cmd,
     "status": status_cmd,
 }
 
@@ -2138,10 +2603,33 @@ RUN_ACTIONS = {
 async def _backup_db_loop():
     import shutil
     while True:
-        await asyncio.sleep(6*3600)
+        await asyncio.sleep(6 * 3600)
         try:
-            if os.path.exists("bot.db"): shutil.copy2("bot.db","bot.backup.db"); logger.info("DB backed up")
-        except Exception as e: logger.debug(f"Backup: {e}")
+            if os.path.exists("bot.db"):
+                shutil.copy2("bot.db", "bot.backup.db")
+                logger.info("DB backed up")
+        except Exception as e:
+            logger.debug(f"Backup: {e}")
+
+
+async def _periodic_cleanup_loop():
+    while True:
+        await asyncio.sleep(300)
+        try:
+            _cleanup_rate_limits()
+            async with _cache_lock:
+                now = time.monotonic()
+                expired = [k for k, (ts, _) in _cache.items() if now - ts > 3600]
+                for k in expired:
+                    _cache.pop(k, None)
+                    if k in _cache_access_order:
+                        _cache_access_order.remove(k)
+            logger.debug(
+                f"Cleanup: cache={len(_cache)}, rate_limit={len(_last_call)}, flood={len(_flood_count)}"
+            )
+        except Exception as e:
+            logger.debug(f"Cleanup loop error: {e}")
+
 
 async def main():
     app = Application.builder().token(TOKEN).build()
@@ -2163,7 +2651,7 @@ async def main():
         BotCommand("screenshot", "Chụp ảnh web"),
         BotCommand("remind", "Đặt nhắc nhở"),
         BotCommand("list", "DS nhắc nhở"),
-        BotCommand("code", "Chạy code Python"),
+        BotCommand("code", "Code → ảnh"),
         BotCommand("password", "Tạo mật khẩu"),
         BotCommand("calc", "Máy tính"),
         BotCommand("anime", "Tra anime"),
@@ -2172,16 +2660,20 @@ async def main():
         BotCommand("wiki", "Tra Wikipedia"),
         BotCommand("tygia", "Tỷ giá ngoại tệ"),
         BotCommand("bypass", "Bypass link rút gọn"),
-        BotCommand("tiktok", "Tai video TikTok"),
+        BotCommand("tiktok", "Tải video TikTok"),
         BotCommand("tiktok_profile", "Xem profile TikTok"),
-        BotCommand("tiktok_search", "Tim kiem TikTok"),
-        BotCommand("tiktok_trending", "Video thinh hanh"),
-        BotCommand("tiktok_seo", "Goi y SEO TikTok"),
+        BotCommand("tiktok_search", "Tìm kiếm TikTok"),
+        BotCommand("tiktok_trending", "Video thịnh hành"),
+        BotCommand("tiktok_seo", "Gợi ý SEO TikTok"),
         BotCommand("tiktok_hashtag", "Tra hashtag TikTok"),
         BotCommand("ask", "Hỏi AI Chatbot"),
         BotCommand("stats", "Thống kê sử dụng"),
         BotCommand("myusage", "Lịch sử của bạn"),
         BotCommand("music", "Tải nhạc YouTube"),
+        BotCommand("yt", "Tải video YouTube"),
+        BotCommand("stock", "Giá cổ phiếu real-time"),
+        BotCommand("lang", "Đổi ngôn ngữ (EN/VI)"),
+        BotCommand("clear", "Xoá lịch sử chat"),
         BotCommand("news", "Tin tức"),
         BotCommand("kick", "Kick user"),
         BotCommand("ban", "Ban user"),
@@ -2237,10 +2729,16 @@ async def main():
     app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CommandHandler("news", news_cmd))
     app.add_handler(CommandHandler("music", music_cmd))
+    app.add_handler(CommandHandler("yt", yt_cmd))
+    app.add_handler(CommandHandler("stock", stock_cmd))
+    app.add_handler(CommandHandler("lang", lang_cmd))
+    app.add_handler(CallbackQueryHandler(lang_callback, pattern="^lang_"))
+    app.add_handler(CallbackQueryHandler(yt_callback, pattern="^yt_"))
     app.add_handler(CommandHandler("tiktok_auto", tiktok_auto_cmd))
     app.add_handler(CommandHandler("tiktok_stop", tiktok_stop_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("myusage", myusage_cmd))
+    app.add_handler(CommandHandler("clear", clear_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_tiktok_reply), group=0)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     app.add_error_handler(error_handler)
@@ -2256,8 +2754,19 @@ async def main():
                 pass
     app.add_handler(MessageHandler(filters.Regex("^/"), stats_middleware), group=99)
 
-    # Initialize database
+    # Initialize database + start flush loop
     await db.get_db()
+    db.start_flush_loop()
+
+    # Preload user language preferences from DB
+    try:
+        cur = await db._exec_read("SELECT user_id, lang FROM user_lang")
+        for row in await cur.fetchall():
+            _user_lang[row[0]] = row[1]
+        if _user_lang:
+            logger.info("Loaded %d user language preferences", len(_user_lang))
+    except Exception as e:
+        logger.debug("No lang prefs to load: %s", e)
 
     PORT = int(os.environ.get("PORT", 10000))
     from aiohttp import web
@@ -2279,21 +2788,45 @@ async def main():
     await app.start()
     await app.updater.start_polling()
 
-    # FIX: re-arm reminders that were persisted before the last restart
     await reschedule_reminders(app.bot)
-    asyncio.create_task(_backup_db_loop())
+    _task_list.append(asyncio.create_task(_backup_db_loop()))
+    _task_list.append(asyncio.create_task(_periodic_cleanup_loop()))
 
-    # FIX: use an Event to allow graceful shutdown instead of while+sleep
     try:
         while not _shutdown_event:
-            await asyncio.sleep(60)
+            await asyncio.sleep(1)
         logger.info("Shutdown received, stopping bot...")
     except asyncio.CancelledError:
         logger.info("Shutdown received, stopping bot...")
     finally:
+        # Cancel all background tasks
+        for task in _task_list:
+            task.cancel()
+        await asyncio.gather(*_task_list, return_exceptions=True)
+        _task_list.clear()
+
+        # Graceful shutdown: cancel all tiktok auto tasks
+        for chat_id, task_info in list(_tiktok_auto_tasks.items()):
+            try:
+                task_info["task"].cancel()
+            except Exception:
+                pass
+        _tiktok_auto_tasks.clear()
+
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
+
+        # Close AI session
+        try:
+            from ai_chat import close_session
+            await close_session()
+        except Exception:
+            pass
+
+        # Close database
+        await db.close_db()
+
         if 'runner' in locals():
             await runner.cleanup()
 

@@ -4,3 +4,4 @@ aiosqlite>=0.20.0
 lunardate>=0.2
 cryptography>=42.0
 yt-dlp>=2024.0.0
+yfinance>=0.2.0

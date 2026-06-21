@@ -1,11 +1,9 @@
-"""ai_chat.py — AI Chatbot using free LLM APIs."""
+"""ai_chat.py — AI Chatbot with retry logic and connection pooling."""
 import os
 import logging
 import json
 import asyncio
-import urllib.request
-import urllib.parse
-import urllib.error
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +12,6 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 AI_MODEL = os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
 
-# 9Router on Render — OpenCode Free (miễn phí không giới hạn)
 ROUTER_API_KEY = os.environ.get(
     "ROUTER_API_KEY",
     "sk-e4eeda3c27c1138d-t2fk64-45c4a4bc",
@@ -35,19 +32,69 @@ SYSTEM_PROMPT = (
     "defaulting to Vietnamese. Be concise, accurate, and helpful."
 )
 
+MAX_RETRIES = 3
+RETRY_DELAY = 1.0
+_session: aiohttp.ClientSession | None = None
+_session_lock = asyncio.Lock()
+
+
+async def _get_session() -> aiohttp.ClientSession:
+    global _session
+    if _session is None or _session.closed:
+        async with _session_lock:
+            if _session is None or _session.closed:
+                timeout = aiohttp.ClientTimeout(total=60, connect=10)
+                _session = aiohttp.ClientSession(timeout=timeout)
+    return _session
+
+
+async def close_session():
+    global _session
+    async with _session_lock:
+        if _session and not _session.closed:
+            await _session.close()
+            _session = None
+
+
+def _build_messages(question: str, history: list | None = None) -> list:
+    msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if history:
+        for h in history:
+            if h.get("role") and h.get("content"):
+                msgs.append({"role": h["role"], "content": h["content"]})
+    msgs.append({"role": "user", "content": question})
+    return msgs
+
+
+def _parse_response(text: str) -> dict:
+    """Parse SSE or JSON response from LLM API."""
+    data_line = None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("data: ") and line != "data: [DONE]":
+            data_line = line[6:]
+            break
+    if data_line:
+        return json.loads(data_line)
+    return json.loads(text)
+
 
 async def ask_ai(question: str, history: list | None = None) -> str:
     """Send question to the best available LLM provider.
-
     Priority: 9Router (OpenCode Free) → Groq → OpenAI
     """
-    # 1. 9Router / OpenCode Free (miễn phí) — luôn thử trước
     if ROUTER_BASE_URL:
-        return await _ask_router(question, history)
-    # 2. Groq (miễn phí)
+        return await _ask_provider(
+            "9Router",
+            f"{ROUTER_BASE_URL}/chat/completions",
+            ROUTER_MODEL,
+            ROUTER_API_KEY,
+            question,
+            history,
+            fallback_fn=_ask_groq if GROQ_API_KEY else None,
+        )
     elif GROQ_API_KEY:
         return await _ask_groq(question, history)
-    # 3. OpenAI (trả phí)
     elif OPENAI_API_KEY:
         return await _ask_openai(question, history)
     else:
@@ -60,142 +107,97 @@ async def ask_ai(question: str, history: list | None = None) -> str:
         )
 
 
-async def _ask_router(question: str, history: list | None = None) -> str:
-    """Use 9Router (OpenCode Free / Kiro / any model)."""
-    try:
-        headers = {"Content-Type": "application/json"}
-        if ROUTER_API_KEY:
-            headers["Authorization"] = f"Bearer {ROUTER_API_KEY}"
+async def _ask_provider(
+    name: str,
+    url: str,
+    model: str,
+    api_key: str,
+    question: str,
+    history: list | None = None,
+    fallback_fn=None,
+) -> str:
+    """Generic LLM call with retry + exponential backoff."""
+    session = await _get_session()
+    msgs = _build_messages(question, history)
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
-        msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
-        if history:
-            for h in history:
-                msgs.append({"role": h["role"], "content": h["content"]})
-        msgs.append({"role": "user", "content": question})
+    body = json.dumps({
+        "model": model,
+        "messages": msgs,
+        "max_tokens": 4096,
+        "temperature": 0.7,
+    })
 
-        body = json.dumps({
-            "model": ROUTER_MODEL,
-            "messages": msgs,
-            "max_tokens": 4096,
-            "temperature": 0.7,
-        }).encode()
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            async with session.post(url, data=body, headers=headers) as resp:
+                if resp.status == 429:
+                    retry_header = resp.headers.get("Retry-After")
+                    if retry_header:
+                        try:
+                            retry_after = float(retry_header)
+                        except (ValueError, TypeError):
+                            retry_after = RETRY_DELAY * (2 ** attempt)
+                    else:
+                        retry_after = RETRY_DELAY * (2 ** attempt)
+                    logger.warning(f"{name} rate limited, retry after {retry_after}s")
+                    await asyncio.sleep(retry_after)
+                    continue
+                if resp.status == 401 and fallback_fn:
+                    logger.warning(f"{name} auth failed, falling back")
+                    return await fallback_fn(question, history)
+                if resp.status >= 500:
+                    logger.warning(f"{name} server error {resp.status}, attempt {attempt+1}")
+                    await asyncio.sleep(RETRY_DELAY * (2 ** attempt))
+                    continue
+                text = await resp.text()
+                data = _parse_response(text)
+                choices = data.get("choices", [])
+                if not choices:
+                    logger.warning(f"{name} returned empty choices")
+                    await asyncio.sleep(RETRY_DELAY * (2 ** attempt))
+                    continue
+                content = choices[0].get("message", {}).get("content")
+                if content is None:
+                    logger.warning(f"{name} returned null content")
+                    await asyncio.sleep(RETRY_DELAY * (2 ** attempt))
+                    continue
+                return content.strip()
+        except asyncio.TimeoutError:
+            logger.warning(f"{name} timeout, attempt {attempt+1}")
+            last_error = "timeout"
+            await asyncio.sleep(RETRY_DELAY * (2 ** attempt))
+        except (aiohttp.ClientError, json.JSONDecodeError, KeyError) as e:
+            logger.error(f"{name} error: {e}")
+            last_error = str(e)
+            await asyncio.sleep(RETRY_DELAY * (2 ** attempt))
 
-        req = urllib.request.Request(
-            f"{ROUTER_BASE_URL}/chat/completions",
-            data=body,
-            headers=headers,
-        )
-
-        def _call():
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                text = resp.read().decode()
-                # SSE: parse first data: line from streaming response
-                data_line = None
-                for line in text.splitlines():
-                    line = line.strip()
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        data_line = line[6:]
-                if data_line:
-                    return json.loads(data_line)
-                return json.loads(text)
-
-        data = await asyncio.to_thread(_call)
-        return data["choices"][0]["message"]["content"].strip()
-    except urllib.error.HTTPError as e:
-        logger.error(f"Router HTTP error {e.code}: {e}")
-        # Fallback: nếu 401 (key ko đúng), thử Groq
-        if e.code == 401 and GROQ_API_KEY:
-            return await _ask_groq(question, history)
-        return f"❌ Lỗi AI (9Router): HTTP {e.code}"
-    except Exception as e:
-        logger.error(f"Router API error: {e}")
-        return f"❌ Lỗi AI (9Router): {e}"
+    if fallback_fn:
+        logger.warning(f"{name} exhausted retries, falling back")
+        return await fallback_fn(question, history)
+    return f"❌ Lỗi AI ({name}): {last_error or 'max retries exceeded'}"
 
 
 async def _ask_groq(question: str, history: list | None = None) -> str:
-    """Use Groq free LLM API."""
-    try:
-        msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
-        if history:
-            for h in history:
-                msgs.append({"role": h["role"], "content": h["content"]})
-        msgs.append({"role": "user", "content": question})
-
-        body = json.dumps({
-            "model": AI_MODEL,
-            "messages": msgs,
-            "max_tokens": 4096,
-            "temperature": 0.7,
-        }).encode()
-
-        req = urllib.request.Request(
-            "https://api.groq.com/openai/v1/chat/completions",
-            data=body,
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            },
-        )
-
-        def _call():
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                text = resp.read().decode()
-                # SSE: parse first data: line from streaming response
-                data_line = None
-                for line in text.splitlines():
-                    line = line.strip()
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        data_line = line[6:]
-                if data_line:
-                    return json.loads(data_line)
-                return json.loads(text)
-
-        data = await asyncio.to_thread(_call)
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        logger.error(f"Groq API error: {e}")
-        return f"❌ Lỗi AI: {e}"
+    return await _ask_provider(
+        "Groq",
+        "https://api.groq.com/openai/v1/chat/completions",
+        AI_MODEL,
+        GROQ_API_KEY,
+        question,
+        history,
+    )
 
 
 async def _ask_openai(question: str, history: list | None = None) -> str:
-    """Use OpenAI API."""
-    try:
-        msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
-        if history:
-            for h in history:
-                msgs.append({"role": h["role"], "content": h["content"]})
-        msgs.append({"role": "user", "content": question})
-
-        body = json.dumps({
-            "model": "gpt-3.5-turbo",
-            "messages": msgs,
-            "max_tokens": 4096,
-        }).encode()
-
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/chat/completions",
-            data=body,
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-        )
-
-        def _call():
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                text = resp.read().decode()
-                # SSE: parse first data: line from streaming response
-                data_line = None
-                for line in text.splitlines():
-                    line = line.strip()
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        data_line = line[6:]
-                if data_line:
-                    return json.loads(data_line)
-                return json.loads(text)
-
-        data = await asyncio.to_thread(_call)
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        logger.error(f"OpenAI API error: {e}")
-        return f"❌ Lỗi AI: {e}"
+    return await _ask_provider(
+        "OpenAI",
+        "https://api.openai.com/v1/chat/completions",
+        "gpt-3.5-turbo",
+        OPENAI_API_KEY,
+        question,
+        history,
+    )

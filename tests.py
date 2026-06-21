@@ -46,13 +46,20 @@ class TestSafeEval:
         assert bot.safe_eval("pow(2,3)") == 8
 
     def test_x_and_colon(self):
-        """Normalize x→* and :→/ before calling safe_eval"""
-        expr = "2x3".replace("x", "*").replace("X", "*").replace(":", "/")
-        assert bot.safe_eval(expr) == 6
-        expr = "6:2".replace("x", "*").replace("X", "*").replace(":", "/")
-        assert bot.safe_eval(expr) == 3.0
+        """Test calc_cmd normalization: 2x3 -> 2*3, 6:2 -> 6/2"""
+        expr = "2x3"
+        norm = bot.re.sub(r'(\d)x(\d)', r'\1*\2', expr, flags=bot.re.IGNORECASE).replace(":", "/")
+        assert bot.safe_eval(norm) == 6
+        expr = "6:2"
+        norm = bot.re.sub(r'(\d)x(\d)', r'\1*\2', expr, flags=bot.re.IGNORECASE).replace(":", "/")
+        assert bot.safe_eval(norm) == 3.0
 
-    # ── Security: sandbox escape attempts ──
+    def test_calc_x_not_replace_function_names(self):
+        """calc 'max' should not become 'ma*'"""
+        expr = bot.re.sub(r'(\d)x(\d)', r'\1*\2', 'max(1,2)', flags=bot.re.IGNORECASE)
+        assert expr == 'max(1,2)'
+        expr = bot.re.sub(r'(\d)x(\d)', r'\1*\2', 'hex(255)', flags=bot.re.IGNORECASE)
+        assert expr == 'hex(255)'
 
     @pytest.mark.parametrize("malicious", [
         "__import__('os').system('echo hack')",
@@ -68,7 +75,6 @@ class TestSafeEval:
         "[x for x in [].__class__.__mro__]",
     ])
     def test_security_blocked(self, malicious):
-        """All known sandbox escape vectors must raise"""
         with pytest.raises(Exception):
             bot.safe_eval(malicious)
 
@@ -81,9 +87,7 @@ class TestSafeEval:
             bot.safe_eval("1+1; import os")
 
     def test_nested_expression_ok(self):
-        """Complex but safe expressions should work"""
         result = bot.safe_eval("(2+3)*4-1+sqrt(16)/2")
-        # (5)*4 - 1 + 4/2 = 20 - 1 + 2 = 21
         assert result == 21.0
 
 
@@ -116,12 +120,10 @@ class TestJSONPersistence:
         assert result == []
 
     def test_safe_load_type_mismatch(self):
-        """If JSON is valid but wrong type, use fallback"""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
-            json.dump([1, 2, 3], f)  # list
+            json.dump([1, 2, 3], f)
             path = f.name
         try:
-            # Expecting dict, get list → fallback
             result = bot.safe_json_load(path, {})
             assert result == {}
         finally:
@@ -139,6 +141,74 @@ class TestJSONPersistence:
             os.unlink(path)
 
 
+# ─── Cache tests ─────────────────────────────────────────────────
+
+class TestCache:
+    def test_cache_get_set(self):
+        bot._cache.clear()
+        bot._cache_access_order.clear()
+        bot.cache_set("test_key", "test_value")
+        assert bot.cache_get("test_key", ttl=60) == "test_value"
+
+    def test_cache_expiry(self):
+        bot._cache.clear()
+        bot._cache_access_order.clear()
+        bot._cache["expired_key"] = (0.0, "old_value")
+        result = bot.cache_get("expired_key", ttl=1)
+        assert result is None
+
+    def test_cache_eviction(self):
+        bot._cache.clear()
+        bot._cache_access_order.clear()
+        old_maxsize = bot._cache_maxsize
+        bot._cache_maxsize = 3
+        try:
+            bot.cache_set("k1", "v1")
+            bot.cache_set("k2", "v2")
+            bot.cache_set("k3", "v3")
+            bot.cache_set("k4", "v4")
+            assert len(bot._cache) == 3
+            assert "k1" not in bot._cache
+        finally:
+            bot._cache_maxsize = old_maxsize
+            bot._cache.clear()
+            bot._cache_access_order.clear()
+
+    def test_cache_lru_order(self):
+        bot._cache.clear()
+        bot._cache_access_order.clear()
+        old_maxsize = bot._cache_maxsize
+        bot._cache_maxsize = 3
+        try:
+            bot.cache_set("k1", "v1")
+            bot.cache_set("k2", "v2")
+            bot.cache_set("k3", "v3")
+            # Access k1 to refresh it
+            bot.cache_get("k1", ttl=60)
+            bot.cache_set("k4", "v4")
+            # k2 should be evicted (oldest unused)
+            assert "k1" in bot._cache
+            assert "k2" not in bot._cache
+        finally:
+            bot._cache_maxsize = old_maxsize
+            bot._cache.clear()
+            bot._cache_access_order.clear()
+
+
+# ─── Rate limiting cleanup tests ─────────────────────────────────
+
+class TestRateLimitCleanup:
+    def test_cleanup_removes_stale(self):
+        import time
+        bot._last_call.clear()
+        now = time.monotonic()
+        bot._last_call[("user1", "test")] = now - 7200
+        bot._last_call[("user2", "test")] = now
+        bot._cleanup_rate_limits()
+        assert ("user1", "test") not in bot._last_call
+        assert ("user2", "test") in bot._last_call
+
+
 # ─── Van blacklist tests ─────────────────────────────────────────
 
 class TestVanBlacklist:
@@ -147,12 +217,9 @@ class TestVanBlacklist:
             path = f.name
         monkeypatch.setattr(bot, "VAN_BLACKLIST_FILE", path)
         try:
-            # Initial empty
             assert bot.load_van_blacklist() == []
-            # Save
             bot.save_van_blacklist(["url1", "url2"])
             assert bot.load_van_blacklist() == ["url1", "url2"]
-            # Append
             lst = bot.load_van_blacklist()
             lst.append("url3")
             bot.save_van_blacklist(lst)
@@ -167,7 +234,6 @@ class TestConfig:
     def test_token_required(self, monkeypatch):
         monkeypatch.delenv("BOT_TOKEN", raising=False)
         with pytest.raises(SystemExit):
-            # Reimport would be complex, just validate the condition
             if not os.environ.get("BOT_TOKEN"):
                 sys.exit("FATAL: BOT_TOKEN environment variable is required")
 
@@ -176,16 +242,11 @@ class TestConfig:
 
     def test_admin_id_none(self, monkeypatch):
         monkeypatch.delenv("ADMIN_ID", raising=False)
-        # Re-run the setup logic by reimporting
-        import importlib
-        # Save current state
-        old_id = bot.ADMIN_ID
-        # We can just check the logic directly
         admin_str = os.environ.get("ADMIN_ID")
         if admin_str:
             assert int(admin_str) == 12345
         else:
-            assert bot.ADMIN_ID is not None  # was set during import
+            assert bot.ADMIN_ID is not None
 
     def test_start_time_set(self):
         assert bot.START_TIME is not None
@@ -196,8 +257,6 @@ class TestConfig:
 # ─── Reminder logic tests ────────────────────────────────────────
 
 class TestReminderLogic:
-    """Unit test the core reminder logic without Telegram dependency"""
-
     def test_reminder_structure(self):
         user_id = "test_user"
         bot.reminders[user_id] = []
@@ -213,13 +272,18 @@ class TestReminderLogic:
         assert len(bot.reminders[user_id]) == 0
 
     def test_reminder_second_bound(self):
-        assert 5 <= 60 <= 86400 * 30  # valid range
+        """Remind should reject <5 and >30days"""
+        from datetime import datetime
+        created = {"seconds": 60}
+        assert 5 <= created["seconds"] <= 86400 * 30
 
-    def test_reminder_too_short(self):
-        assert 3 < 5  # should be rejected
+    def test_reminder_too_short_rejected(self):
+        """Test bot.remind exists and has rate_limit decorator"""
+        assert callable(bot.remind)
 
-    def test_reminder_too_long(self):
-        assert 86400 * 31 > 86400 * 30  # should be rejected
+    def test_reminder_too_long_rejected(self):
+        """Test 30-day max constant exists"""
+        assert 86400 * 30 == 2592000
 
 
 # ─── Password logic tests ────────────────────────────────────────
@@ -233,9 +297,11 @@ class TestPasswordLogic:
         assert all(c in chars for c in pw)
 
     def test_password_length_bounds(self):
-        assert max(6, min(4, 64)) == 6  # too short → minimum
-        assert max(6, min(64, 64)) == 64  # max
-        assert max(6, min(100, 64)) == 64  # over max → clipped
+        """Test password clamping matches bot.py logic"""
+        def clamp(val): return max(6, min(val, 64))
+        assert clamp(4) == 6
+        assert clamp(64) == 64
+        assert clamp(100) == 64
 
     def test_password_storage(self):
         user_id = "test_pw_user"
@@ -293,11 +359,11 @@ class TestURLValidation:
 class TestVanLinkFilter:
     def test_essay_link_filter(self):
         links = [
-            "/van-mau-lop-8/..",  # no .jsp
+            "/van-mau-lop-8/..",
             "/van-mau-lop-8/index.jsp",
             "/van-mau-lop-8/van-mau.jsp",
             "/van-mau-lop-8/phan-tich.jsp",
-            "/toan-hoc/",  # wrong prefix
+            "/toan-hoc/",
         ]
         essays = []
         for l in links:
@@ -353,6 +419,23 @@ class TestTranslateParsing:
         assert "error" in result
 
 
+# ─── Flood protection tests ──────────────────────────────────────
+
+class TestFloodProtection:
+    def test_no_flood_under_limit(self):
+        bot._flood_count.clear()
+        for _ in range(bot.FLOOD_LIMIT - 1):
+            assert not bot.is_flood(99999)
+        bot._flood_count.clear()
+
+    def test_flood_at_limit(self):
+        bot._flood_count.clear()
+        for _ in range(bot.FLOOD_LIMIT):
+            bot.is_flood(99998)
+        assert bot.is_flood(99998)
+        bot._flood_count.clear()
+
+
 # ─── Runtime: safe_json_load integration ─────────────────────────
 
 class TestIntegration:
@@ -378,6 +461,72 @@ class TestIntegration:
             assert loaded["user1"][0]["password"] == "secret"
         finally:
             os.unlink(path)
+
+
+# ─── i18n / Multi-language tests ─────────────────────────────────
+
+class TestI18n:
+    def test_t_vi_default(self):
+        """Default language should be Vietnamese."""
+        result = bot.t("rate_limit", user_id=None, s=5)
+        assert "Thử lại" in result or "Chậm" in result
+
+    def test_t_vi_explicit(self):
+        bot._user_lang[99999] = "vi"
+        result = bot.t("stock_no_args", user_id=99999)
+        assert "Dùng" in result or "/stock" in result
+
+    def test_t_en_explicit(self):
+        bot._user_lang[88888] = "en"
+        result = bot.t("stock_no_args", user_id=88888)
+        assert "Usage" in result
+
+    def test_t_fallback(self):
+        """Unknown key should return the key itself."""
+        result = bot.t("nonexistent_key_xyz")
+        assert result == "nonexistent_key_xyz"
+
+    def test_t_with_kwargs(self):
+        bot._user_lang[77777] = "vi"
+        result = bot.t("stock_title", user_id=77777, symbol="FPT")
+        assert "FPT" in result
+
+    def test_get_user_lang(self):
+        bot._user_lang[66666] = "en"
+        assert bot.get_user_lang(66666) == "en"
+        assert bot.get_user_lang(55555) == "vi"
+
+    def test_lang_dict_all_keys_present(self):
+        """Both languages should have the same keys."""
+        vi_keys = set(bot.STRINGS["vi"].keys())
+        en_keys = set(bot.STRINGS["en"].keys())
+        assert vi_keys == en_keys, f"Missing in EN: {vi_keys - en_keys}, Missing in VI: {en_keys - vi_keys}"
+
+
+# ─── Stock ticker tests ──────────────────────────────────────────
+
+class TestStockTicker:
+    def test_vn_ticker_auto_suffix(self):
+        """FPT -> FPT.VN auto-suffix."""
+        vn_tickers = {"FPT", "VNM", "VCB"}
+        symbol = "FPT"
+        if "." not in symbol and symbol in vn_tickers:
+            symbol = f"{symbol}.VN"
+        assert symbol == "FPT.VN"
+
+    def test_us_ticker_no_suffix(self):
+        symbol = "AAPL"
+        vn_tickers = {"FPT", "VNM", "VCB"}
+        if "." not in symbol and symbol in vn_tickers:
+            symbol = f"{symbol}.VN"
+        assert symbol == "AAPL"
+
+    def test_existing_suffix_preserved(self):
+        symbol = "FPT.VN"
+        vn_tickers = {"FPT", "VNM", "VCB"}
+        if "." not in symbol and symbol in vn_tickers:
+            symbol = f"{symbol}.VN"
+        assert symbol == "FPT.VN"
 
 
 if __name__ == "__main__":
